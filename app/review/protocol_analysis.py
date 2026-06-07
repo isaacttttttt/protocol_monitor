@@ -14,7 +14,7 @@ BINANCE_FAPI = "https://fapi.binance.com"
 OKX_REST = "https://www.okx.com"
 YAHOO_CHART = "https://query1.finance.yahoo.com/v8/finance/chart"
 DEFAULT_CRYPTO_SYMBOLS = ["ETHUSDT", "BTCUSDT"]
-DEFAULT_EQUITY_SYMBOLS = ["CRCL", "WDC", "ARM", "INTU", "INQU"]
+DEFAULT_EQUITY_SYMBOLS = ["CRCL", "WDC", "ARM", "INTU", "INFQ"]
 
 
 @dataclass(frozen=True)
