@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     feishu_keyword: str = "监控报告"
     binance_ws_base: str = "wss://fstream.binance.com/ws"
     binance_rest_base: str = "https://fapi.binance.com"
+    okx_rest_base: str = "https://www.okx.com"
+    yahoo_chart_base: str = "https://query1.finance.yahoo.com/v8/finance/chart"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

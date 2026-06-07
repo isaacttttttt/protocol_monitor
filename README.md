@@ -43,6 +43,8 @@ TELEGRAM_CHAT_ID=
 FEISHU_WEBHOOK_URL=
 BINANCE_WS_BASE=wss://fstream.binance.com/ws
 BINANCE_REST_BASE=https://fapi.binance.com
+OKX_REST_BASE=https://www.okx.com
+YAHOO_CHART_BASE=https://query1.finance.yahoo.com/v8/finance/chart
 ```
 
 All tokens and webhook secrets live in this configuration layer. Do not edit them into Python files.
@@ -108,6 +110,8 @@ with cron schedule:
 ```
 
 See `RAILWAY.md` for the full deployment steps and required Railway variables.
+
+On hosted environments where Binance returns `HTTP 451`, crypto reports automatically fall back to OKX public swap data and then Yahoo spot crypto data.
 
 ## Strategy Configuration
 

@@ -30,9 +30,13 @@ FEISHU_WEBHOOK_URL=<your-feishu-webhook>
 FEISHU_KEYWORD=监控报告
 BINANCE_WS_BASE=wss://fstream.binance.com/ws
 BINANCE_REST_BASE=https://fapi.binance.com
+OKX_REST_BASE=https://www.okx.com
+YAHOO_CHART_BASE=https://query1.finance.yahoo.com/v8/finance/chart
 ```
 
 `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` can stay empty unless you also want Telegram.
+
+Crypto reports try Binance USD-M first. If the Railway region receives Binance `HTTP 451`, the report automatically falls back to OKX public swap data, then Yahoo spot crypto data.
 
 ## Dashboard Steps
 

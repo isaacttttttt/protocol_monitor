@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import json
+import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any
 
+from app.config.settings import get_settings
 
 BINANCE_FAPI = "https://fapi.binance.com"
+OKX_REST = "https://www.okx.com"
 YAHOO_CHART = "https://query1.finance.yahoo.com/v8/finance/chart"
 
 
@@ -25,6 +28,24 @@ class ProtocolAnalysis:
     key_levels: str
     evidence: list[str]
     updated_at: str
+
+
+@dataclass(frozen=True)
+class CryptoMarketData:
+    source: str
+    market: str
+    k15: list[dict[str, Any]]
+    k5: list[dict[str, Any]]
+    k4: list[dict[str, Any]]
+    k1d: list[dict[str, Any]]
+    last_price: float
+    change_pct: float | None
+    high_24h: float | None
+    low_24h: float | None
+    mark_price: float | None = None
+    funding_rate: float | None = None
+    open_interest: float | None = None
+    fallback_notes: tuple[str, ...] = ()
 
 
 def build_protocol_analyses(crypto_symbols: list[str] | None = None, equity_symbols: list[str] | None = None) -> list[ProtocolAnalysis]:
@@ -55,15 +76,13 @@ def build_protocol_analyses(crypto_symbols: list[str] | None = None, equity_symb
 
 
 def analyze_crypto(symbol: str) -> tuple[ProtocolAnalysis, dict[str, Any]]:
-    k15 = _binance_klines(symbol, "15m", 120)
-    k5 = _binance_klines(symbol, "5m", 80)
-    k4 = _binance_klines(symbol, "4h", 120)
-    k1d = _binance_klines(symbol, "1d", 120)
-    ticker = _binance_get("/fapi/v1/ticker/24hr", {"symbol": symbol})
-    mark = _binance_get("/fapi/v1/premiumIndex", {"symbol": symbol})
-    oi = _binance_get("/fapi/v1/openInterest", {"symbol": symbol})
+    data = _load_crypto_market_data(symbol)
+    k15 = data.k15
+    k5 = data.k5
+    k4 = data.k4
+    k1d = data.k1d
 
-    price = float(ticker["lastPrice"])
+    price = data.last_price
     c15 = _candle_state(k15)
     c4 = _candle_state(k4)
     c1d = _candle_state(k1d)
@@ -98,16 +117,18 @@ def analyze_crypto(symbol: str) -> tuple[ProtocolAnalysis, dict[str, Any]]:
     evidence = [
         f"15m close {k15[-1]['close']:.2f}, ATR14 {c15['atr']:.2f}, MACD hist {c15['macd']['hist']:.2f}, CVD delta {_short_num(c15['cvd']['delta'])}",
         f"4h trend {c4['structure']['trend']}, 1d trend {c1d['structure']['trend']}",
-        f"24h {float(ticker['priceChangePercent']):+.2f}%, high/low {float(ticker['highPrice']):.2f}/{float(ticker['lowPrice']):.2f}",
-        f"mark {float(mark['markPrice']):.2f}, funding {float(mark['lastFundingRate']) * 100:+.4f}%, OI {_short_num(float(oi['openInterest']))}",
+        _crypto_24h_evidence(data),
+        _crypto_derivatives_evidence(data),
     ]
+    if data.fallback_notes:
+        evidence.append("fallback " + "；".join(data.fallback_notes))
 
     return (
         ProtocolAnalysis(
             symbol=symbol,
-            market="Crypto USD-M",
+            market=data.market,
             price=price,
-            change_pct=float(ticker["priceChangePercent"]),
+            change_pct=data.change_pct,
             current_status=current_status,
             hit_status=hit_status,
             suggestion_1=suggestion_1,
@@ -275,11 +296,144 @@ def _binance_klines(symbol: str, interval: str, limit: int) -> list[dict[str, fl
 
 
 def _binance_get(path: str, params: dict[str, Any]) -> Any:
-    return _get_json(BINANCE_FAPI + path, params)
+    base = get_settings().binance_rest_base or BINANCE_FAPI
+    return _get_json(base.rstrip("/") + path, params)
+
+
+def _load_crypto_market_data(symbol: str) -> CryptoMarketData:
+    errors: list[str] = []
+    loaders = [
+        ("Binance USD-M", _load_binance_crypto),
+        ("OKX SWAP", _load_okx_crypto),
+        ("Yahoo spot", _load_yahoo_crypto),
+    ]
+    for name, loader in loaders:
+        try:
+            data = loader(symbol)
+            return replace(data, fallback_notes=tuple(errors)) if errors else data
+        except Exception as exc:
+            errors.append(f"{name} failed: {_brief_error(exc)}")
+    raise RuntimeError("; ".join(errors))
+
+
+def _load_binance_crypto(symbol: str) -> CryptoMarketData:
+    k15 = _binance_klines(symbol, "15m", 120)
+    k5 = _binance_klines(symbol, "5m", 80)
+    k4 = _binance_klines(symbol, "4h", 120)
+    k1d = _binance_klines(symbol, "1d", 120)
+    ticker = _binance_get("/fapi/v1/ticker/24hr", {"symbol": symbol})
+    mark = _binance_get("/fapi/v1/premiumIndex", {"symbol": symbol})
+    oi = _binance_get("/fapi/v1/openInterest", {"symbol": symbol})
+    return CryptoMarketData(
+        source="Binance USD-M",
+        market="Crypto USD-M",
+        k15=k15,
+        k5=k5,
+        k4=k4,
+        k1d=k1d,
+        last_price=float(ticker["lastPrice"]),
+        change_pct=float(ticker["priceChangePercent"]),
+        high_24h=float(ticker["highPrice"]),
+        low_24h=float(ticker["lowPrice"]),
+        mark_price=float(mark["markPrice"]),
+        funding_rate=float(mark["lastFundingRate"]),
+        open_interest=float(oi["openInterest"]),
+    )
+
+
+def _load_okx_crypto(symbol: str) -> CryptoMarketData:
+    inst_id = _okx_symbol(symbol)
+    k15 = _okx_candles(inst_id, "15m", 120)
+    k5 = _okx_candles(inst_id, "5m", 80)
+    k4 = _okx_candles(inst_id, "4H", 120)
+    k1d = _okx_candles(inst_id, "1D", 120)
+    ticker = _okx_get("/api/v5/market/ticker", {"instId": inst_id})["data"][0]
+    funding = _okx_get("/api/v5/public/funding-rate", {"instId": inst_id})["data"][0]
+    open_interest = _okx_get("/api/v5/public/open-interest", {"instType": "SWAP", "instId": inst_id})["data"][0]
+    last = float(ticker["last"])
+    open_24h = float(ticker["open24h"]) if ticker.get("open24h") else 0.0
+    oi_value = open_interest.get("oiCcy") or open_interest.get("oi") or 0.0
+    return CryptoMarketData(
+        source="OKX SWAP",
+        market="Crypto SWAP",
+        k15=k15,
+        k5=k5,
+        k4=k4,
+        k1d=k1d,
+        last_price=last,
+        change_pct=((last / open_24h) - 1) * 100 if open_24h else None,
+        high_24h=float(ticker["high24h"]) if ticker.get("high24h") else None,
+        low_24h=float(ticker["low24h"]) if ticker.get("low24h") else None,
+        mark_price=last,
+        funding_rate=float(funding["fundingRate"]) if funding.get("fundingRate") else None,
+        open_interest=float(oi_value),
+    )
+
+
+def _load_yahoo_crypto(symbol: str) -> CryptoMarketData:
+    yahoo_symbol = _yahoo_crypto_symbol(symbol)
+    k15 = _yahoo_chart(yahoo_symbol, "15m", "5d")[-120:]
+    k5 = _yahoo_chart(yahoo_symbol, "5m", "5d")[-80:]
+    hourly = _yahoo_chart(yahoo_symbol, "60m", "3mo")
+    k4 = _aggregate_candles(hourly, 4)[-120:]
+    k1d = _yahoo_chart(yahoo_symbol, "1d", "1y")[-120:]
+    day_window = k15[-96:] if len(k15) >= 96 else k15
+    last = k15[-1]
+    reference = day_window[0]
+    return CryptoMarketData(
+        source="Yahoo spot",
+        market="Crypto Spot",
+        k15=k15,
+        k5=k5,
+        k4=k4,
+        k1d=k1d,
+        last_price=float(last["close"]),
+        change_pct=((last["close"] / reference["close"]) - 1) * 100 if reference["close"] else None,
+        high_24h=max(candle["high"] for candle in day_window),
+        low_24h=min(candle["low"] for candle in day_window),
+    )
+
+
+def _okx_get(path: str, params: dict[str, Any]) -> Any:
+    base = get_settings().okx_rest_base or OKX_REST
+    return _get_json(base.rstrip("/") + path, params)
+
+
+def _okx_candles(inst_id: str, bar: str, limit: int) -> list[dict[str, Any]]:
+    payload = _okx_get("/api/v5/market/candles", {"instId": inst_id, "bar": bar, "limit": limit})
+    rows = payload.get("data") or []
+    candles = [
+        {
+            "time": datetime.fromtimestamp(int(row[0]) / 1000, tz=timezone.utc).isoformat(),
+            "open": float(row[1]),
+            "high": float(row[2]),
+            "low": float(row[3]),
+            "close": float(row[4]),
+            "volume": float(row[5]),
+        }
+        for row in rows
+    ]
+    candles.sort(key=lambda item: item["time"])
+    if not candles:
+        raise ValueError(f"no OKX candle data for {inst_id} {bar}")
+    return candles
+
+
+def _okx_symbol(symbol: str) -> str:
+    if symbol.endswith("USDT"):
+        return f"{symbol[:-4]}-USDT-SWAP"
+    raise ValueError(f"unsupported OKX crypto symbol: {symbol}")
+
+
+def _yahoo_crypto_symbol(symbol: str) -> str:
+    if symbol.endswith("USDT"):
+        return f"{symbol[:-4]}-USD"
+    raise ValueError(f"unsupported Yahoo crypto symbol: {symbol}")
 
 
 def _yahoo_chart(symbol: str, interval: str, range_: str) -> list[dict[str, float]]:
-    result = _get_json(f"{YAHOO_CHART}/{symbol}", {"interval": interval, "range": range_})["chart"]["result"][0]
+    base = get_settings().yahoo_chart_base or YAHOO_CHART
+    result = _get_json(f"{base.rstrip('/')}/{symbol}", {"interval": interval, "range": range_})["chart"]["result"][0]
     timestamps = result["timestamp"]
     quote = result["indicators"]["quote"][0]
     rows: list[dict[str, float]] = []
@@ -305,8 +459,62 @@ def _yahoo_chart(symbol: str, interval: str, range_: str) -> list[dict[str, floa
 def _get_json(url: str, params: dict[str, Any]) -> Any:
     request_url = url + "?" + urllib.parse.urlencode(params)
     request = urllib.request.Request(request_url, headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(request, timeout=20) as response:
-        return json.loads(response.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="ignore").strip()
+        detail = f": {body[:160]}" if body else ""
+        raise RuntimeError(f"HTTP {exc.code}{detail}") from exc
+
+
+def _crypto_24h_evidence(data: CryptoMarketData) -> str:
+    change = "N/A" if data.change_pct is None else f"{data.change_pct:+.2f}%"
+    high = "N/A" if data.high_24h is None else f"{data.high_24h:.2f}"
+    low = "N/A" if data.low_24h is None else f"{data.low_24h:.2f}"
+    return f"24h {change}, high/low {high}/{low}, source {data.source}"
+
+
+def _crypto_derivatives_evidence(data: CryptoMarketData) -> str:
+    if data.mark_price is None and data.funding_rate is None and data.open_interest is None:
+        return "derivatives data unavailable on spot fallback"
+    mark = "N/A" if data.mark_price is None else f"{data.mark_price:.2f}"
+    funding = "N/A" if data.funding_rate is None else f"{data.funding_rate * 100:+.4f}%"
+    oi = "N/A" if data.open_interest is None else _short_num(data.open_interest)
+    return f"mark {mark}, funding {funding}, OI {oi}"
+
+
+def _aggregate_candles(candles: list[dict[str, Any]], size: int) -> list[dict[str, Any]]:
+    aggregated: list[dict[str, Any]] = []
+    for index in range(0, len(candles), size):
+        chunk = candles[index : index + size]
+        if len(chunk) < size:
+            continue
+        aggregated.append(
+            {
+                "time": chunk[-1]["time"],
+                "open": chunk[0]["open"],
+                "high": max(candle["high"] for candle in chunk),
+                "low": min(candle["low"] for candle in chunk),
+                "close": chunk[-1]["close"],
+                "volume": sum(candle["volume"] for candle in chunk),
+            }
+        )
+    if not aggregated:
+        raise ValueError("not enough candles to aggregate")
+    return aggregated
+
+
+def _brief_error(exc: Exception) -> str:
+    message = str(exc).replace("\n", " ").strip()
+    lowered = message.lower()
+    if "http 451" in lowered:
+        return "HTTP 451"
+    if "timed out" in lowered or "timeout" in lowered:
+        return "timeout"
+    if "refused" in lowered or "10061" in lowered or "积极拒绝" in message or "无法连接" in message:
+        return "connection refused"
+    return message[:140] if message else exc.__class__.__name__
 
 
 def _ema(values: list[float], period: int) -> list[float]:
