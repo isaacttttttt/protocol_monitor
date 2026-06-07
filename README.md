@@ -163,7 +163,7 @@ automation:
 
 report:
   crypto_symbols: ["ETHUSDT", "BTCUSDT"]
-  equity_symbols: ["CRCL", "WDC", "ARM"]
+  equity_symbols: ["CRCL", "WDC", "ARM", "INTU", "INQU"]
 ```
 
 ## Codex Automation

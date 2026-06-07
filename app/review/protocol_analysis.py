@@ -13,6 +13,8 @@ from app.config.settings import get_settings
 BINANCE_FAPI = "https://fapi.binance.com"
 OKX_REST = "https://www.okx.com"
 YAHOO_CHART = "https://query1.finance.yahoo.com/v8/finance/chart"
+DEFAULT_CRYPTO_SYMBOLS = ["ETHUSDT", "BTCUSDT"]
+DEFAULT_EQUITY_SYMBOLS = ["CRCL", "WDC", "ARM", "INTU", "INQU"]
 
 
 @dataclass(frozen=True)
@@ -50,8 +52,8 @@ class CryptoMarketData:
 
 
 def build_protocol_analyses(crypto_symbols: list[str] | None = None, equity_symbols: list[str] | None = None) -> list[ProtocolAnalysis]:
-    crypto_symbols = crypto_symbols or ["ETHUSDT", "BTCUSDT"]
-    equity_symbols = equity_symbols or ["CRCL", "WDC", "ARM"]
+    crypto_symbols = crypto_symbols or DEFAULT_CRYPTO_SYMBOLS
+    equity_symbols = equity_symbols or DEFAULT_EQUITY_SYMBOLS
     analyses: list[ProtocolAnalysis] = []
 
     btc_state: dict[str, Any] | None = None
@@ -551,7 +553,9 @@ def _yahoo_crypto_symbol(symbol: str) -> str:
 def _yahoo_chart(symbol: str, interval: str, range_: str) -> list[dict[str, float]]:
     base = get_settings().yahoo_chart_base or YAHOO_CHART
     result = _get_json(f"{base.rstrip('/')}/{symbol}", {"interval": interval, "range": range_})["chart"]["result"][0]
-    timestamps = result["timestamp"]
+    timestamps = result.get("timestamp") or []
+    if not timestamps:
+        raise ValueError(f"no Yahoo chart data for {symbol}")
     quote = result["indicators"]["quote"][0]
     rows: list[dict[str, float]] = []
     for index, timestamp in enumerate(timestamps):

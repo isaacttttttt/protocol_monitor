@@ -31,4 +31,4 @@ automation:
 report:
   include_protocol_analysis: true
   crypto_symbols: ["ETHUSDT", "BTCUSDT"]
-  equity_symbols: ["CRCL", "WDC", "ARM"]
+  equity_symbols: ["CRCL", "WDC", "ARM", "INTU", "INQU"]

@@ -1,9 +1,12 @@
+import pytest
+
 from app.review.protocol_analysis import (
     ProtocolAnalysis,
     _aggregate_candles,
     _brief_error,
     _equity_final_instruction,
     _okx_symbol,
+    _yahoo_chart,
     _yahoo_crypto_symbol,
     format_protocol_section,
 )
@@ -30,6 +33,16 @@ def test_aggregate_candles_groups_ohlcv():
 def test_brief_error_compacts_common_network_errors():
     assert _brief_error(RuntimeError("HTTP 451: restricted")) == "HTTP 451"
     assert _brief_error(RuntimeError("<urlopen error [WinError 10061] 由于目标计算机积极拒绝，无法连接。>")) == "connection refused"
+
+
+def test_yahoo_chart_missing_timestamp_has_clear_error(monkeypatch):
+    def fake_get_json(url, params):
+        return {"chart": {"result": [{}]}}
+
+    monkeypatch.setattr("app.review.protocol_analysis._get_json", fake_get_json)
+
+    with pytest.raises(ValueError, match="no Yahoo chart data for INQU"):
+        _yahoo_chart("INQU", "1d", "1y")
 
 
 def test_protocol_section_includes_final_instruction():
