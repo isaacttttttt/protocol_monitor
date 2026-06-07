@@ -26,6 +26,7 @@ class ProtocolAnalysis:
     suggestion_1: str
     suggestion_2: str
     key_levels: str
+    final_instruction: list[str]
     evidence: list[str]
     updated_at: str
 
@@ -100,6 +101,7 @@ def analyze_crypto(symbol: str) -> tuple[ProtocolAnalysis, dict[str, Any]]:
 
     if symbol == "ETHUSDT":
         current_status, hit_status, suggestion_1, suggestion_2, key_levels = _eth_protocol(price, k5, c15, c4, c1d)
+        final_instruction = _eth_final_instruction(price, c15)
     else:
         if strong_bullish:
             current_status = "BTC 15m 强反弹过滤器开启，短线风险偏好偏多。"
@@ -113,6 +115,7 @@ def analyze_crypto(symbol: str) -> tuple[ProtocolAnalysis, dict[str, Any]]:
         suggestion_1 = f"建议1：若 15m 继续站在 {c15['structure']['last_swing_high']:.2f} 上方，维持对 ETH 做空信号的降级/拦截。"
         suggestion_2 = f"建议2：若跌回 {c15['structure']['last_swing_low']:.2f} 下方且 MACD/CVD 同步转弱，再切换为风险收缩过滤。"
         key_levels = f"15m swing high {c15['structure']['last_swing_high']:.2f}；15m swing low {c15['structure']['last_swing_low']:.2f}"
+        final_instruction = _btc_final_instruction(price, c15, c1d)
 
     evidence = [
         f"15m close {k15[-1]['close']:.2f}, ATR14 {c15['atr']:.2f}, MACD hist {c15['macd']['hist']:.2f}, CVD delta {_short_num(c15['cvd']['delta'])}",
@@ -134,6 +137,7 @@ def analyze_crypto(symbol: str) -> tuple[ProtocolAnalysis, dict[str, Any]]:
             suggestion_1=suggestion_1,
             suggestion_2=suggestion_2,
             key_levels=key_levels,
+            final_instruction=final_instruction,
             evidence=evidence,
             updated_at=_iso_now(),
         ),
@@ -172,6 +176,7 @@ def analyze_equity(symbol: str) -> ProtocolAnalysis:
         f"1d ATR14 {d['atr']:.2f}, MACD hist {d['macd']['hist']:.2f}, CVD trend {d['cvd']['trend']}",
         f"60m trend {h['structure']['trend']}, 15m trend {q['structure']['trend']}",
     ]
+    final_instruction = _equity_final_instruction(symbol, float(last["close"]), last, d, h, q)
     return ProtocolAnalysis(
         symbol=symbol,
         market="US Equity",
@@ -182,6 +187,7 @@ def analyze_equity(symbol: str) -> ProtocolAnalysis:
         suggestion_1=suggestion_1,
         suggestion_2=suggestion_2,
         key_levels=key_levels,
+        final_instruction=final_instruction,
         evidence=evidence,
         updated_at=last["time"],
     )
@@ -201,6 +207,8 @@ def format_protocol_section(analyses: list[ProtocolAnalysis]) -> list[str]:
                 item.suggestion_1,
                 item.suggestion_2,
                 f"关键位：{item.key_levels}",
+                "最终交易指令：",
+                *item.final_instruction,
                 "证据：" + "；".join(item.evidence),
             ]
         )
@@ -239,6 +247,107 @@ def _eth_protocol(price: float, k5: list[dict[str, float]], c15: dict[str, Any],
     return current_status, hit_status, suggestion_1, suggestion_2, key_levels
 
 
+def _eth_final_instruction(price: float, c15: dict[str, Any]) -> list[str]:
+    if price > 1605:
+        current = f"当前指令：现价 {_fmt_price(price)}：禁止追多；已进入 1605 上方确认区，等待回踩或失效信号。"
+    elif 1583 <= price <= 1605:
+        current = f"当前指令：现价 {_fmt_price(price)}：禁止直接开仓；等待 1605 站回或 1583 跌回后的二次确认。"
+    elif price < 1544:
+        current = f"当前指令：现价 {_fmt_price(price)}：禁止抄底；只观察扫低后是否重新收回 1570/1583。"
+    else:
+        current = f"当前指令：现价 {_fmt_price(price)}：禁止直接开仓；Micro 等 C-M2/C-M3 触发。"
+    atr = max(float(c15["atr"]), 1.0)
+    short_fail = 1605 + atr * 0.8
+    return [
+        current,
+        "多头预警：15m 连续收在 1605 上方；回踩 1600-1605 不破；目标看 1645 / 1665 / 1746；跌回 1583 下方失效。",
+        f"空头预警：1583-1605 反抽失败；或 1645-1665 反抽失败；或跌破 1583 后反抽不回；目标看 1544 / 1500 / 1457；站回 {_fmt_price(short_fail)} 且 CVD 创新高失效。",
+        "Macro 预警：1982-2044 收回才重新讨论宏观修复；跌破 1544 下方看 1500，极端看 1457。",
+        "一句话结论：ETH 当前是 Micro 反抽与扫低回收战场；多空都等触发，Macro 暂不升级。",
+    ]
+
+
+def _btc_final_instruction(price: float, c15: dict[str, Any], c1d: dict[str, Any]) -> list[str]:
+    swing_high = float(c15["structure"]["last_swing_high"])
+    swing_low = float(c15["structure"]["last_swing_low"])
+    atr = max(float(c15["atr"]), price * 0.002)
+    macro_high = float(c1d["structure"]["last_swing_high"])
+    macro_low = float(c1d["structure"]["last_swing_low"])
+    reclaim_band = _price_band(swing_high, atr * 0.15)
+    support_band = _range_text(max(swing_low, swing_high - atr * 0.6), swing_high)
+    fail_band = _price_band(swing_low, atr * 0.15)
+    target_1 = swing_high + atr
+    target_2 = swing_high + atr * 2
+    target_3 = swing_high + atr * 3
+    down_1 = swing_low - atr
+    down_2 = swing_low - atr * 2
+    down_3 = swing_low - atr * 3
+    return [
+        f"当前指令：现价 {_fmt_price(price)}：BTC 不给独立开仓指令；只作为 ETH 风险过滤器。",
+        f"多头预警：{reclaim_band} 站回；回踩 {support_band} 不破；ETH 空头降级；上方看 {_fmt_price(target_1)} / {_fmt_price(target_2)} / {_fmt_price(target_3)}；跌回 {fail_band} 失效。",
+        f"空头预警：跌破 {fail_band} 后反抽不回；或 15m 反抽 {reclaim_band} 失败；ETH 多头降级；下方看 {_fmt_price(down_1)} / {_fmt_price(down_2)} / {_fmt_price(down_3)}。",
+        f"Macro 预警：日线收回 {_fmt_price(macro_high)} 才重新讨论高周期偏多；跌破 {_fmt_price(macro_low)} 进入风险收缩。",
+        "一句话结论：BTC 当前是 ETH 的风控阀门；不抢方向，只用来确认或否决 ETH Micro 信号。",
+    ]
+
+
+def _equity_final_instruction(
+    symbol: str,
+    price: float,
+    last: dict[str, float],
+    daily: dict[str, Any],
+    hourly: dict[str, Any],
+    m15: dict[str, Any],
+) -> list[str]:
+    intraday_reclaim = float(m15["structure"]["last_swing_high"])
+    intraday_fail = float(m15["structure"]["last_swing_low"])
+    day_high = float(last["high"])
+    day_low = float(last["low"])
+    daily_swing_high = float(daily["structure"]["last_swing_high"])
+    daily_swing_low = float(daily["structure"]["last_swing_low"])
+    intraday_atr = max(float(m15["atr"]), price * 0.01)
+    daily_atr = max(float(daily["atr"]), price * 0.04)
+
+    reclaim_center = max(intraday_reclaim, price)
+    reclaim_band = _price_band(reclaim_center, max(intraday_atr * 0.25, price * 0.002))
+    pullback_center = max(intraday_fail, min(price, reclaim_center - intraday_atr * 0.35))
+    pullback_band = _price_band(pullback_center, max(intraday_atr * 0.2, price * 0.002))
+    fail_level = min(intraday_fail, day_low)
+
+    target_1 = max(reclaim_center + intraday_atr, day_high)
+    target_2 = max(target_1 + daily_atr * 0.45, target_1 * 1.03)
+    target_3 = max(target_2 + daily_atr * 0.65, daily_swing_high if daily_swing_high > target_2 else target_2 * 1.05)
+
+    resistance_1 = max(reclaim_center, day_high)
+    resistance_2 = max(resistance_1 + daily_atr * 0.55, daily_swing_low)
+    down_1 = fail_level
+    down_2 = max(0.01, down_1 - max(daily_atr * 0.55, price * 0.04))
+    down_3 = max(0.01, down_1 - max(daily_atr * 1.8, price * 0.12))
+    macro_watch = max(daily_swing_low, resistance_2)
+    macro_reclaim = max(daily_swing_high, macro_watch + daily_atr * 1.2)
+
+    if daily["structure"]["bos_down"]:
+        current = f"当前指令：现价 {_fmt_price(price)}：禁止直接开仓；破位后只等站回确认或反抽失败。"
+        conclusion = f"一句话结论：{symbol} 当前不是抄底盘，而是破位后的流动性战场。Micro 等触发，Macro 先剔除。"
+    elif daily["structure"]["bos_up"]:
+        current = f"当前指令：现价 {_fmt_price(price)}：禁止追高；趋势延续只等回踩确认。"
+        conclusion = f"一句话结论：{symbol} 当前是趋势延续观察盘；只做回踩确认，不做情绪追价。"
+    elif hourly["structure"]["bos_down"]:
+        current = f"当前指令：现价 {_fmt_price(price)}：禁止直接开仓；小时级别走弱，优先等反抽失败或重新站回。"
+        conclusion = f"一句话结论：{symbol} 当前偏防守；Micro 可以观察，Macro 不加仓。"
+    else:
+        current = f"当前指令：现价 {_fmt_price(price)}：禁止直接开仓；区间内等待 L3 触发。"
+        conclusion = f"一句话结论：{symbol} 当前是区间观察标的；Micro 等触发，Macro 暂不升级。"
+
+    return [
+        current,
+        f"多头预警：{reclaim_band} 站回；回踩 {pullback_band} 不破；目标看 {_fmt_price(target_1)} / {_fmt_price(target_2)} / {_fmt_price(target_3)}；跌回 {_fmt_price(fail_level)} 下方失效。",
+        f"空头预警：{_price_band(resistance_1, daily_atr * 0.18)} 反抽失败；或 {_price_band(resistance_2, daily_atr * 0.22)} 反抽失败；或跌破 {_fmt_price(fail_level)} 后反抽不回；目标看 {_fmt_price(down_1)} / {_fmt_price(down_2)} / {_fmt_price(down_3)}。",
+        f"Macro 预警：{_price_band(macro_watch, daily_atr * 0.2)} 收回：进入观察池；{_price_band(macro_reclaim, daily_atr * 0.25)} 收回：才重新讨论中线多头；跌破 {_fmt_price(fail_level)}：下方看 {_fmt_price(down_2)}，极端看 {_fmt_price(down_3)}。",
+        conclusion,
+    ]
+
+
 def _equity_status(daily: dict[str, Any], hourly: dict[str, Any], m15: dict[str, Any]) -> tuple[str, str]:
     if daily["structure"]["bos_down"] and daily["cvd"]["makes_new_low"]:
         return "日线 BOS_DOWN 且资金流 proxy 创新低，处于破位风险状态。", "命中：L4 日线结构破位；暂无 L3。"
@@ -253,19 +362,27 @@ def _equity_status(daily: dict[str, Any], hourly: dict[str, Any], m15: dict[str,
 
 def _apply_btc_filter(item: ProtocolAnalysis, btc_state: dict[str, Any]) -> ProtocolAnalysis:
     if btc_state.get("strong_bullish"):
+        final_instruction = list(item.final_instruction)
+        if len(final_instruction) > 2:
+            final_instruction[2] += " BTC 强多期间，ETH 空头预警降级或过滤。"
         return ProtocolAnalysis(
             **{
                 **item.__dict__,
                 "current_status": item.current_status + " BTC strong bullish 已开启，ETH 做空信号需要降级或过滤。",
                 "hit_status": item.hit_status + "；命中：BTC 强多过滤。",
+                "final_instruction": final_instruction,
             }
         )
     if btc_state.get("strong_bearish"):
+        final_instruction = list(item.final_instruction)
+        if len(final_instruction) > 1:
+            final_instruction[1] += " BTC 强空期间，ETH 多头预警降级或过滤。"
         return ProtocolAnalysis(
             **{
                 **item.__dict__,
                 "current_status": item.current_status + " BTC strong bearish 已开启，ETH 做多信号需要降级或过滤。",
                 "hit_status": item.hit_status + "；命中：BTC 强空过滤。",
+                "final_instruction": final_instruction,
             }
         )
     return item
@@ -607,6 +724,21 @@ def _short_num(value: float) -> str:
     return f"{value:.2f}"
 
 
+def _fmt_price(value: float) -> str:
+    return f"{value:.2f}"
+
+
+def _price_band(center: float, half_width: float) -> str:
+    width = max(float(half_width), abs(center) * 0.001)
+    return _range_text(center - width, center + width)
+
+
+def _range_text(first: float, second: float) -> str:
+    low = min(first, second)
+    high = max(first, second)
+    return f"{low:.2f}-{high:.2f}"
+
+
 def _iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -622,6 +754,13 @@ def _error_analysis(symbol: str, market: str, exc: Exception) -> ProtocolAnalysi
         suggestion_1="建议1：下一轮自动化重试。",
         suggestion_2="建议2：若连续失败，检查网络或数据源接口。",
         key_levels="N/A",
+        final_instruction=[
+            "当前指令：数据不足，禁止开仓。",
+            "多头预警：等待下一轮恢复行情后重新计算。",
+            "空头预警：等待下一轮恢复行情后重新计算。",
+            "Macro 预警：数据源未恢复前不做高周期判断。",
+            "一句话结论：先修数据，再谈交易。",
+        ],
         evidence=[f"error={exc}"],
         updated_at=_iso_now(),
     )
