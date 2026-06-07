@@ -1,0 +1,28 @@
+id: ETH_C_M3_LIQUIDITY_SWEEP_LONG_V1
+enabled: true
+exchange: BINANCE
+symbol: ETHUSDT
+book: Micro
+strategy_name: C-M3 Liquidity Sweep Long
+direction: LONG
+max_hold_hours: 48
+
+levels:
+  sweep_level_1: 1544
+  sweep_level_2: 1538
+  reclaim_level_1: 1570
+  reclaim_level_2: 1583
+
+targets:
+  tp1: 1645
+  tp2: 1746
+  tp3: 1982
+
+stop_loss:
+  mode: sweep_low
+  atr_buffer_multiplier: 0.3
+
+risk:
+  min_rr_to_tp1: 1.5
+  default_position_r: 0.25
+  max_position_r: 0.5

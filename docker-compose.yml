@@ -1,0 +1,31 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: spm
+      POSTGRES_USER: spm
+      POSTGRES_PASSWORD: spm_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - spm-postgres-data:/var/lib/postgresql/data
+
+  spm-app:
+    build: .
+    depends_on:
+      - postgres
+    environment:
+      APP_ENV: docker
+      LOG_LEVEL: INFO
+      DATABASE_URL: postgresql+asyncpg://spm:spm_password@postgres:5432/spm
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      FEISHU_WEBHOOK_URL: ${FEISHU_WEBHOOK_URL:-}
+      BINANCE_WS_BASE: ${BINANCE_WS_BASE:-wss://fstream.binance.com/ws}
+      BINANCE_REST_BASE: ${BINANCE_REST_BASE:-https://fapi.binance.com}
+    volumes:
+      - ./configs:/app/configs:ro
+    command: ["python", "-m", "app.main"]
+
+volumes:
+  spm-postgres-data:

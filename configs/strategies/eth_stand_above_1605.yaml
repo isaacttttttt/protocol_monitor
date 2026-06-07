@@ -1,0 +1,15 @@
+id: ETH_STAND_ABOVE_1605_V1
+enabled: true
+exchange: BINANCE
+symbol: ETHUSDT
+book: Micro
+strategy_name: ETH Stand Above 1605
+direction: NEUTRAL
+max_hold_hours: 48
+
+levels:
+  stand_above: 1605
+  support_low: 1600
+  fail_back: 1583
+  macro_repair_low: 1982
+  macro_repair_high: 2044

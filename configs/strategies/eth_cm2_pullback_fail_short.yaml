@@ -1,0 +1,37 @@
+id: ETH_C_M2_PULLBACK_FAIL_SHORT_V1
+enabled: true
+exchange: BINANCE
+symbol: ETHUSDT
+book: Micro
+strategy_name: C-M2 Pullback Fail Short
+direction: SHORT
+max_hold_hours: 48
+
+zones:
+  pullback_zone_1:
+    low: 1583
+    high: 1605
+  pullback_zone_2:
+    low: 1645
+    high: 1665
+
+levels:
+  fail_back_level: 1583
+  first_invalid: 1605
+  second_invalid: 1645
+  macro_repair: 1982
+
+targets:
+  tp1: 1544
+  tp2: 1500
+  tp3: 1457
+
+stop_loss:
+  mode: structure
+  price: 1625
+  atr_buffer_multiplier: 0.2
+
+risk:
+  min_rr_to_tp1: 1.5
+  default_position_r: 0.25
+  max_position_r: 0.5

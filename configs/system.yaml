@@ -1,0 +1,34 @@
+system:
+  name: SmartMoney Protocol Monitor
+  timezone: UTC
+  mode: monitor_only
+  log_level: INFO
+
+risk:
+  min_rr_to_tp1: 1.5
+  micro_max_hold_hours: 48
+  duplicate_signal_cooldown_minutes: 30
+  l4_duplicate_cooldown_minutes: 10
+  default_position_r: 0.25
+  max_micro_position_r: 0.5
+
+notification:
+  enabled: true
+  levels: ["L2", "L3", "L4"]
+  channels:
+    telegram:
+      enabled: false
+    feishu:
+      enabled: true
+      keyword: 监控报告
+
+storage:
+  kline_cache_limit: 1000
+
+automation:
+  report_interval_hours: 2
+
+report:
+  include_protocol_analysis: true
+  crypto_symbols: ["ETHUSDT", "BTCUSDT"]
+  equity_symbols: ["CRCL", "WDC", "ARM"]

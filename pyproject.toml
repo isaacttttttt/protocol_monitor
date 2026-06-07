@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "smartmoney-protocol-monitor"
+version = "0.1.0"
+description = "Monitor-only Smart Money Protocol signal engine."
+requires-python = ">=3.11"
+dependencies = [
+    "aiohttp>=3.9",
+    "websockets>=12",
+    "pydantic>=2",
+    "pydantic-settings>=2",
+    "PyYAML>=6",
+    "SQLAlchemy>=2",
+    "asyncpg>=0.29",
+    "aiosqlite>=0.19",
+    "loguru>=0.7",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+include = ["app*"]

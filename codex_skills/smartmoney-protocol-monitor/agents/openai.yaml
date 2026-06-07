@@ -1,0 +1,3 @@
+display_name: SmartMoney Protocol Monitor
+short_description: Operate and adjust the local SPM crypto strategy monitor.
+default_prompt: Use this skill to inspect, test, configure, or deploy the SmartMoney Protocol Monitor in the current repository.

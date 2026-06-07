@@ -1,0 +1,12 @@
+symbols:
+  - exchange: BINANCE
+    symbol: ETHUSDT
+    enabled: true
+    type: PERPETUAL
+    intervals: ["1m", "5m", "15m", "1h", "4h"]
+
+  - exchange: BINANCE
+    symbol: BTCUSDT
+    enabled: true
+    type: PERPETUAL
+    intervals: ["1m", "5m", "15m", "1h", "4h"]

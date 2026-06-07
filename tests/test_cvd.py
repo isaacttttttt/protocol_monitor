@@ -1,0 +1,14 @@
+from app.indicators.cvd import calculate_cvd_proxy
+
+
+def test_cvd_proxy(kline_factory):
+    candles = [
+        kline_factory("ETHUSDT", "15m", 10, 11, 9, 11, 100),
+        kline_factory("ETHUSDT", "15m", 11, 12, 10, 10, 50),
+        kline_factory("ETHUSDT", "15m", 10, 11, 9, 12, 200),
+    ]
+    result = calculate_cvd_proxy(candles)
+    assert result.cvd == 250
+    assert result.delta == 200
+    assert result.makes_new_high is True
+    assert result.trend == "UP"
