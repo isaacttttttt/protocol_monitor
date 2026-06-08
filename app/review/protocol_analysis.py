@@ -5,7 +5,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.config.settings import get_settings
@@ -15,6 +15,7 @@ OKX_REST = "https://www.okx.com"
 YAHOO_CHART = "https://query1.finance.yahoo.com/v8/finance/chart"
 DEFAULT_CRYPTO_SYMBOLS = ["ETHUSDT", "BTCUSDT"]
 DEFAULT_EQUITY_SYMBOLS = ["CRCL", "WDC", "ARM", "INTU", "INFQ"]
+LOCAL_TZ = timezone(timedelta(hours=8))
 
 
 @dataclass(frozen=True)
@@ -141,7 +142,7 @@ def analyze_crypto(symbol: str) -> tuple[ProtocolAnalysis, dict[str, Any]]:
             key_levels=key_levels,
             final_instruction=final_instruction,
             evidence=evidence,
-            updated_at=_iso_now(),
+            updated_at=k15[-1]["time"],
         ),
         state,
     )
@@ -191,7 +192,7 @@ def analyze_equity(symbol: str) -> ProtocolAnalysis:
         key_levels=key_levels,
         final_instruction=final_instruction,
         evidence=evidence,
-        updated_at=last["time"],
+        updated_at=m15[-1]["time"],
     )
 
 
@@ -209,6 +210,7 @@ def format_protocol_section(analyses: list[ProtocolAnalysis]) -> list[str]:
                 item.suggestion_1,
                 item.suggestion_2,
                 f"关键位：{item.key_levels}",
+                f"数据时间：{_format_data_time(item.updated_at)}",
                 "最终交易指令：",
                 *item.final_instruction,
                 "证据：" + "；".join(item.evidence),
@@ -221,36 +223,65 @@ def _eth_protocol(price: float, k5: list[dict[str, float]], c15: dict[str, Any],
     last_two_lows_ok = len(k5) >= 2 and min(k["low"] for k in k5[-2:]) >= 1600
     no_30m_fail = len(k5) >= 6 and all(k["close"] >= 1583 for k in k5[-6:])
     stand_1605_l3 = price > 1605 and last_two_lows_ok and no_30m_fail and c15["cvd"]["delta"] > 0
-    cm2_l4 = price > 1605 or c15["cvd"]["makes_new_high"]
     cm2_l2 = 1583 <= price <= 1605
     cm3_l2 = any(k["low"] < 1544 for k in k5[-80:])
+    flow = _eth_flow_label(c15)
 
-    if stand_1605_l3:
-        current_status = "ETH 正在从 1583-1605 第一压力区向上确认，短线反弹成立但 Macro 仍未修复。"
+    if price >= 1746:
+        current_status = f"ETH 已越过 1746 延伸目标，短线进入高位延伸/兑现区，{flow}。"
+        hit_status = "命中：1605 站稳后的延伸段；C-M2 做空失效；Macro 仍需 1982-2044 修复。"
+        suggestion_1 = "建议1：不追多；只有回踩 1746/1665 不破且 MACD/CVD 重新转强，才看 1982-2044。"
+        suggestion_2 = "建议2：若跌回 1746 且反抽不回，优先看 1665/1645 回测；跌破 1605 才重新评估 C-M2 空头。"
+    elif price >= 1665:
+        current_status = f"ETH 已突破 1645-1665 第二反弹目标区，进入 1665-1746 延伸确认段，{flow}。"
+        hit_status = "命中：反弹目标区上破；C-M2 做空失效；暂无 Macro 修复。"
+        suggestion_1 = "建议1：禁止追多；若回踩 1665 不破且 15m 动能转强，再看 1746。"
+        suggestion_2 = "建议2：若跌回 1665 且反抽失败，先看 1645/1605 回测，不把回落直接当作 Macro 空头。"
+    elif price >= 1645:
+        current_status = f"ETH 正在 1645-1665 第二压力/反弹目标区内交易，{flow}。"
+        hit_status = "命中：C-M2 目标/压力区；此处不再是低位追多点。"
+        suggestion_1 = "建议1：若 15m 放量站上 1665 且回踩不破，再看 1746。"
+        suggestion_2 = "建议2：若 1645-1665 反抽失败并跌回 1645，下方先看 1605/1583。"
+    elif stand_1605_l3:
+        current_status = f"ETH 从 1583-1605 第一压力区向上确认，短线反弹成立但 Macro 仍未修复，{flow}。"
         hit_status = "命中：ETH_STAND_ABOVE_1605 L3；同时 C-M2 做空失效。"
-    elif cm2_l4:
-        current_status = "ETH 正在测试/站上 1605，CVD 偏强，反抽失败空不成立。"
-        hit_status = "命中：C-M2 L4 风险/失效；1605 站稳仍需下一根确认。"
+        suggestion_1 = "建议1：若 15m 连续守住 1605 且 5m low 守住 1600，短线反弹看 1645-1665。"
+        suggestion_2 = "建议2：若跌回 1605 后反抽失败，先看 1583；跌回 1583 才重新考虑 C-M2 空头。"
+    elif price > 1605 or c15["cvd"]["makes_new_high"]:
+        current_status = f"ETH 位于 1605 上方第一反弹段，C-M2 反抽失败空暂不成立，{flow}。"
+        hit_status = "命中：C-M2 L4 风险/失效；1605 站稳仍需动能确认。"
+        suggestion_1 = "建议1：若 15m 连续收在 1605 上方且动能修复，才看 1645-1665。"
+        suggestion_2 = "建议2：若跌回 1605/1583 且 BTC 不强、CVD 不创新高，再考虑反抽失败空。"
     elif cm2_l2:
-        current_status = "ETH 位于 1583-1605 第一反抽压力区，处于 C-M2 与 1605 站稳双观察。"
+        current_status = f"ETH 位于 1583-1605 第一反抽压力区，处于 C-M2 与 1605 站稳双观察，{flow}。"
         hit_status = "命中：C-M2 L2 / 1605 L2；暂无 L3。"
+        suggestion_1 = "建议1：只有站回 1605 并回踩不破，才切换到短线反弹观察。"
+        suggestion_2 = "建议2：若 1583 跌回并反抽不回，优先按 C-M2 反抽失败空处理。"
     elif cm3_l2 and price > 1570:
-        current_status = "ETH 已出现扫低后回收，但当前离 sweep low 较远，追多 R/R 需要复核。"
+        current_status = f"ETH 已出现扫低后回收，但当前离 sweep low 较远，追多 R/R 需要复核，{flow}。"
         hit_status = "命中：C-M3 L2；暂无 L3。"
+        suggestion_1 = "建议1：只有重新收回 1583/1605 且 BTC 不强空，才考虑扫低反杀升级。"
+        suggestion_2 = "建议2：若跌回 sweep low 下方，C-M3 失效。"
     else:
-        current_status = "ETH 未命中核心 L3 条件，维持区间观察。"
+        current_status = f"ETH 未命中核心 L3 条件，维持区间观察，{flow}。"
         hit_status = "未命中 L3。"
+        suggestion_1 = "建议1：等待 1605 站回或 1544 扫低回收。"
+        suggestion_2 = "建议2：跌破 1544 后反抽不回，优先防守。"
 
-    suggestion_1 = "建议1：若 15m 连续收在 1605 上方且 5m low 守住 1600，按短线反弹看 1645-1665。"
-    suggestion_2 = "建议2：若跌回 1583 下方且 BTC 不强、CVD 不创新高、R/R>=1.5，再考虑 C-M2 反抽失败空。"
-    key_levels = "1544 / 1583 / 1605 / 1645-1665 / 1982"
+    key_levels = "1544 / 1583 / 1605 / 1645-1665 / 1746 / 1982-2044"
     if c4["structure"]["trend"] == "DOWN" or c1d["macd"]["hist"] < 0:
         current_status += " 4h/1d 仍未给出宏观反转。"
     return current_status, hit_status, suggestion_1, suggestion_2, key_levels
 
 
 def _eth_final_instruction(price: float, c15: dict[str, Any]) -> list[str]:
-    if price > 1605:
+    if price >= 1746:
+        current = f"当前指令：现价 {_fmt_price(price)}：禁止追多；1746 延伸目标已进入兑现区，只等回踩或继续放量确认。"
+    elif price >= 1665:
+        current = f"当前指令：现价 {_fmt_price(price)}：禁止追多；1645-1665 目标区已兑现，等待 1665 回踩确认。"
+    elif price >= 1645:
+        current = f"当前指令：现价 {_fmt_price(price)}：禁止直接追多；价格正在第二压力区，等站上 1665 或反抽失败。"
+    elif price > 1605:
         current = f"当前指令：现价 {_fmt_price(price)}：禁止追多；已进入 1605 上方确认区，等待回踩或失效信号。"
     elif 1583 <= price <= 1605:
         current = f"当前指令：现价 {_fmt_price(price)}：禁止直接开仓；等待 1605 站回或 1583 跌回后的二次确认。"
@@ -259,13 +290,18 @@ def _eth_final_instruction(price: float, c15: dict[str, Any]) -> list[str]:
     else:
         current = f"当前指令：现价 {_fmt_price(price)}：禁止直接开仓；Micro 等 C-M2/C-M3 触发。"
     atr = max(float(c15["atr"]), 1.0)
-    short_fail = 1605 + atr * 0.8
+    levels = [1544, 1583, 1605, 1645, 1665, 1746, 1982, 2044]
+    upside_targets = _format_targets([level for level in levels if level > price], fallback=price + atr)
+    downside_targets = _format_targets([level for level in reversed(levels) if level < price], fallback=price - atr)
+    pullback_level = 1665 if price >= 1665 else 1645 if price >= 1645 else 1605
+    fail_level = 1645 if price >= 1665 else 1605 if price >= 1645 else 1583
+    short_zone = "1746/1665" if price >= 1746 else "1665/1645" if price >= 1665 else "1645-1665" if price >= 1645 else "1583-1605"
     return [
         current,
-        "多头预警：15m 连续收在 1605 上方；回踩 1600-1605 不破；目标看 1645 / 1665 / 1746；跌回 1583 下方失效。",
-        f"空头预警：1583-1605 反抽失败；或 1645-1665 反抽失败；或跌破 1583 后反抽不回；目标看 1544 / 1500 / 1457；站回 {_fmt_price(short_fail)} 且 CVD 创新高失效。",
+        f"多头预警：回踩 {_fmt_price(pullback_level)} 附近不破，且 MACD/CVD 同步转强；上方目标看 {upside_targets}；跌回 {_fmt_price(fail_level)} 下方失效。",
+        f"空头预警：{short_zone} 反抽失败，或跌回 {_fmt_price(fail_level)} 后反抽不回；下方目标看 {downside_targets}；重新站回 {_fmt_price(price + atr * 0.8)} 且 CVD 创新高失效。",
         "Macro 预警：1982-2044 收回才重新讨论宏观修复；跌破 1544 下方看 1500，极端看 1457。",
-        "一句话结论：ETH 当前是 Micro 反抽与扫低回收战场；多空都等触发，Macro 暂不升级。",
+        "一句话结论：ETH 当前是动态反弹段，不再复读 1605；Micro 看回踩确认，Macro 仍未修复。",
     ]
 
 
@@ -351,8 +387,10 @@ def _equity_final_instruction(
 
 
 def _equity_status(daily: dict[str, Any], hourly: dict[str, Any], m15: dict[str, Any]) -> tuple[str, str]:
-    if daily["structure"]["bos_down"] and daily["cvd"]["makes_new_low"]:
-        return "日线 BOS_DOWN 且资金流 proxy 创新低，处于破位风险状态。", "命中：L4 日线结构破位；暂无 L3。"
+    if daily["structure"]["bos_down"]:
+        if daily["cvd"]["makes_new_low"]:
+            return "日线 BOS_DOWN 且资金流 proxy 创新低，处于破位风险状态。", "命中：L4 日线结构破位；暂无 L3。"
+        return "日线 BOS_DOWN，结构已经破位但资金流未继续创新低，处于破位后反抽观察。", "命中：L4 日线结构破位；等待 L3 反抽确认。"
     if daily["structure"]["bos_up"] and daily["cvd"]["delta"] > 0:
         return "日线 BOS_UP 且成交量 proxy 支持，处于趋势延续观察。", "命中：L2 趋势延续观察；L3 需回踩确认。"
     if hourly["structure"]["bos_up"] and m15["cvd"]["delta"] > 0:
@@ -741,6 +779,46 @@ def _range_text(first: float, second: float) -> str:
     low = min(first, second)
     high = max(first, second)
     return f"{low:.2f}-{high:.2f}"
+
+
+def _format_targets(levels: list[float], fallback: float) -> str:
+    unique: list[float] = []
+    for level in levels:
+        if not unique or abs(level - unique[-1]) > 0.01:
+            unique.append(level)
+    targets = unique[:3] or [fallback]
+    return " / ".join(_fmt_price(level) for level in targets)
+
+
+def _format_data_time(value: str) -> str:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return value
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    utc_time = parsed.astimezone(timezone.utc)
+    local_time = utc_time.astimezone(LOCAL_TZ)
+    age_seconds = max(0.0, (datetime.now(timezone.utc) - utc_time).total_seconds())
+    if age_seconds >= 86400:
+        age = f"{age_seconds / 86400:.1f} 天前"
+    elif age_seconds >= 3600:
+        age = f"{age_seconds / 3600:.1f} 小时前"
+    else:
+        age = f"{age_seconds / 60:.0f} 分钟前"
+    return f"{local_time:%Y-%m-%d %H:%M:%S} Asia/Shanghai（{age}）"
+
+
+def _eth_flow_label(c15: dict[str, Any]) -> str:
+    macd_hist = float(c15["macd"]["hist"])
+    cvd_delta = float(c15["cvd"]["delta"])
+    if macd_hist > 0 and cvd_delta > 0:
+        return "短线动能与资金流同步偏多"
+    if macd_hist > 0 and cvd_delta <= 0:
+        return "价格动能偏多但 CVD 未确认，存在高位分歧"
+    if macd_hist <= 0 and cvd_delta > 0:
+        return "CVD 有承接但价格动能尚未修复"
+    return "MACD/CVD 同步偏弱，反弹质量需要复核"
 
 
 def _iso_now() -> str:

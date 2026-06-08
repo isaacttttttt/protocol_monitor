@@ -4,7 +4,10 @@ from app.review.protocol_analysis import (
     ProtocolAnalysis,
     _aggregate_candles,
     _brief_error,
+    _eth_final_instruction,
+    _eth_protocol,
     _equity_final_instruction,
+    _format_data_time,
     _okx_symbol,
     _yahoo_chart,
     _yahoo_crypto_symbol,
@@ -43,6 +46,12 @@ def test_yahoo_chart_missing_timestamp_has_clear_error(monkeypatch):
 
     with pytest.raises(ValueError, match="no Yahoo chart data for INQU"):
         _yahoo_chart("INQU", "1d", "1y")
+
+
+def test_format_data_time_uses_local_timezone():
+    formatted = _format_data_time("2026-06-05T20:00:00+00:00")
+
+    assert formatted.startswith("2026-06-06 04:00:00 Asia/Shanghai")
 
 
 def test_protocol_section_includes_final_instruction():
@@ -90,3 +99,26 @@ def test_equity_final_instruction_for_breakdown():
     assert "多头预警：" in instruction[1]
     assert "空头预警：" in instruction[2]
     assert instruction[-1] == "一句话结论：CRCL 当前不是抄底盘，而是破位后的流动性战场。Micro 等触发，Macro 先剔除。"
+
+
+def test_eth_instruction_adapts_after_second_target_zone():
+    c15 = {
+        "atr": 20.0,
+        "macd": {"hist": 2.0},
+        "cvd": {"delta": -100.0, "makes_new_high": False},
+        "structure": {"trend": "RANGE"},
+    }
+    c4 = {"structure": {"trend": "RANGE"}}
+    c1d = {"macd": {"hist": 1.0}}
+    k5 = [{"low": 1668.0, "close": 1670.0} for _ in range(6)]
+
+    current_status, hit_status, suggestion_1, suggestion_2, key_levels = _eth_protocol(1692.0, k5, c15, c4, c1d)
+    instruction = _eth_final_instruction(1692.0, c15)
+
+    assert "1665-1746 延伸确认段" in current_status
+    assert "CVD 未确认" in current_status
+    assert "反弹目标区上破" in hit_status
+    assert "1746" in suggestion_1
+    assert "1645-1665。跌回" not in instruction[1]
+    assert "1982.00 / 2044.00" in instruction[1]
+    assert "1544 / 1583 / 1605 / 1645-1665 / 1746 / 1982-2044" == key_levels
