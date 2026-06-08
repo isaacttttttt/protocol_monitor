@@ -1,6 +1,6 @@
 # Railway Cron Deployment
 
-This project can run on Railway as a short-lived Cron Job. Railway starts the container every 2 hours, executes the report command, calculates and archives indicators, calls DeepSeek, sends the Feishu notification, and exits.
+This project can run on Railway as a short-lived Cron Job. Railway starts the container every 1 hour, executes the report command, calculates and archives indicators, calls DeepSeek, sends the Feishu notification, and exits.
 
 ## Railway Settings
 
@@ -11,12 +11,12 @@ The repository includes `railway.toml`:
 builder = "DOCKERFILE"
 
 [deploy]
-startCommand = "python -m app.main report --hours 2 --send"
-cronSchedule = "0 */2 * * *"
+startCommand = "python -m app.main report --hours 1 --send"
+cronSchedule = "0 * * * *"
 restartPolicyType = "NEVER"
 ```
 
-Railway schedules are UTC. `0 */2 * * *` means every 2 hours at minute 0.
+Railway schedules are UTC. `0 * * * *` means every hour at minute 0.
 
 ## Required Variables
 
@@ -34,8 +34,8 @@ OKX_REST_BASE=https://www.okx.com
 YAHOO_CHART_BASE=https://query1.finance.yahoo.com/v8/finance/chart
 DEEPSEEK_API_KEY=<your-deepseek-api-key>
 DEEPSEEK_BASE_URL=https://api.deepseek.com
-DEEPSEEK_MODEL=deepseek-v4-flash
-DEEPSEEK_THINKING=disabled
+DEEPSEEK_MODEL=deepseek-v4-pro
+DEEPSEEK_THINKING=high
 DEEPSEEK_TEMPERATURE=0.2
 DEEPSEEK_MAX_TOKENS=6000
 DEEPSEEK_TIMEOUT_SECONDS=120
@@ -64,10 +64,10 @@ Without Postgres or a volume, the Feishu report still works, but historical indi
 2. In Railway, create a new project from the GitHub repo.
 3. Keep the generated service as a Cron Job service.
 4. Confirm the service settings show:
-   - Start Command: `python -m app.main report --hours 2 --send`
-   - Cron Schedule: `0 */2 * * *`
+   - Start Command: `python -m app.main report --hours 1 --send`
+   - Cron Schedule: `0 * * * *`
 5. Add the variables above in the service Variables tab.
-6. Deploy and open Logs to confirm the report prints and Feishu receives `SPM 2H DeepSeek 协议监控报告`.
+6. Deploy and open Logs to confirm the report prints and Feishu receives `SPM 1H DeepSeek 协议监控报告`.
 
 ## Manual Test
 

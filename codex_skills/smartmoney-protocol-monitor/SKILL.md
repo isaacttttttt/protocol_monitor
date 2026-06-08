@@ -26,7 +26,7 @@ Use this skill for the local SPM repository.
 
 ```powershell
 pytest
-python -m app.main report --hours 2
+python -m app.main report --hours 1
 ```
 
 On Windows, `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run_monitor.ps1 -RunOnce` is the preferred initialization smoke test.

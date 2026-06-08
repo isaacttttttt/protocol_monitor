@@ -1,5 +1,5 @@
 param(
-    [int]$Hours = 2,
+    [int]$Hours = 1,
     [switch]$SkipTests
 )
 

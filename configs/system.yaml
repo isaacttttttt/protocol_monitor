@@ -26,7 +26,7 @@ storage:
   kline_cache_limit: 1000
 
 automation:
-  report_interval_hours: 2
+  report_interval_hours: 1
 
 report:
   include_protocol_analysis: true

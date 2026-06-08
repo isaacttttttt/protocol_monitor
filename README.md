@@ -17,6 +17,7 @@ It does not place orders, manage exchange accounts, or require trading permissio
 - Crypto protocol v16 and Equity protocol v17 are versioned under `protocols/`.
 - DeepSeek API adapter using an OpenAI-compatible chat completions endpoint.
 - Indicator archive table plus local JSONL archive.
+- Indicator inventory in `docs/INDICATORS.md`.
 - BTC strong bullish / strong bearish filter.
 - R/R filter, duplicate cooldown, 48H Micro time-stop helper.
 - ETH C-M2 pullback-fail short strategy.
@@ -52,8 +53,8 @@ OKX_REST_BASE=https://www.okx.com
 YAHOO_CHART_BASE=https://query1.finance.yahoo.com/v8/finance/chart
 DEEPSEEK_API_KEY=
 DEEPSEEK_BASE_URL=https://api.deepseek.com
-DEEPSEEK_MODEL=deepseek-v4-flash
-DEEPSEEK_THINKING=disabled
+DEEPSEEK_MODEL=deepseek-v4-pro
+DEEPSEEK_THINKING=high
 DEEPSEEK_TEMPERATURE=0.2
 DEEPSEEK_MAX_TOKENS=6000
 DEEPSEEK_TIMEOUT_SECONDS=120
@@ -112,16 +113,16 @@ The app reads tokens from your shell environment or `.env`.
 
 ## Railway Cron Deployment
 
-For hosted 2H Feishu reports, Railway Cron can run this workflow because each run is a short-lived outbound HTTPS job. The repo includes `railway.toml`, which runs:
+For hosted 1H Feishu reports, Railway Cron can run this workflow because each run is a short-lived outbound HTTPS job. The repo includes `railway.toml`, which runs:
 
 ```powershell
-python -m app.main report --hours 2 --send
+python -m app.main report --hours 1 --send
 ```
 
 with cron schedule:
 
 ```text
-0 */2 * * *
+0 * * * *
 ```
 
 See `RAILWAY.md` for the full deployment steps and required Railway variables.
@@ -162,21 +163,21 @@ pytest
 SPM includes a local report command for Codex automation or any system scheduler:
 
 ```powershell
-python -m app.main report --hours 2
-python -m app.main report --hours 2 --send
+python -m app.main report --hours 1
+python -m app.main report --hours 1 --send
 ```
 
 On Windows, the wrapper script is:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run_periodic_report.ps1 -Hours 2
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run_periodic_report.ps1 -Hours 1
 ```
 
 The first command prints a local summary. The second command pushes the same report through enabled Telegram/Feishu channels. The default interval lives in `configs/system.yaml`:
 
 ```yaml
 automation:
-  report_interval_hours: 2
+  report_interval_hours: 1
 
 report:
   use_deepseek_analysis: true
@@ -199,10 +200,10 @@ Use it when asking Codex to inspect, run, adjust, or deploy this monitor.
 For a recurring Codex automation, provide the interval, for example:
 
 ```text
-Every 2 hours, in C:\Users\16225\Documents\SmartMoney Protocol Monitor, use the smartmoney-protocol-monitor skill to run python -m app.main report --hours 2 --send, then run pytest and summarize any errors.
+Every 1 hour, in C:\Users\16225\Documents\SmartMoney Protocol Monitor, use the smartmoney-protocol-monitor skill to run python -m app.main report --hours 1 --send, then run pytest and summarize any errors.
 ```
 
-Change `4` to your preferred `X`.
+Change `1` to your preferred `X`.
 
 ## FAQ
 

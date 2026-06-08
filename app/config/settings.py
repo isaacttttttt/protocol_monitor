@@ -17,8 +17,8 @@ class Settings(BaseSettings):
     yahoo_chart_base: str = "https://query1.finance.yahoo.com/v8/finance/chart"
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
-    deepseek_model: str = "deepseek-v4-flash"
-    deepseek_thinking: str = "disabled"
+    deepseek_model: str = "deepseek-v4-pro"
+    deepseek_thinking: str = "high"
     deepseek_temperature: float = 0.2
     deepseek_max_tokens: int = 6000
     deepseek_timeout_seconds: int = 120
