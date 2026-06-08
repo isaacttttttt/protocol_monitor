@@ -25,16 +25,18 @@ DEFAULT_EQUITY_SYMBOLS = ["CRCL", "WDC", "ARM", "INTU", "INFQ"]
 EQUITY_CONTEXT_SYMBOLS = ["SPY", "QQQ", "IWM", "XLK", "SMH"]
 
 
-def build_indicator_snapshot(system_config: dict[str, Any]) -> dict[str, Any]:
-    report_config = system_config.get("report", {})
-    crypto_symbols = report_config.get("crypto_symbols") or DEFAULT_CRYPTO_SYMBOLS
-    equity_symbols = report_config.get("equity_symbols") or DEFAULT_EQUITY_SYMBOLS
+def build_indicator_snapshot(system_config: dict[str, Any], settings: Settings | None = None) -> dict[str, Any]:
+    watchlist = resolve_watchlist(system_config, settings)
+    crypto_symbols = watchlist["crypto_symbols"]
+    equity_symbols = watchlist["equity_symbols"]
+    equity_context_symbols = watchlist["equity_context_symbols"]
 
     snapshot: dict[str, Any] = {
         "schema_version": 3,
         "run_id": datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S") + "-" + uuid4().hex[:8],
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "mode": "indicator_snapshot_only",
+        "watchlist": watchlist,
         "indicator_quality": {
             "real_cvd": "unavailable; cvd_proxy uses candle direction x volume",
             "cluster_delta": "unavailable from current public data connectors",
@@ -98,7 +100,7 @@ def build_indicator_snapshot(system_config: dict[str, Any]) -> dict[str, Any]:
     for symbol in crypto_symbols:
         snapshot["symbols"]["crypto"].append(_safe_build(lambda: _build_crypto_snapshot(str(symbol)), str(symbol), "crypto"))
 
-    equity_context = _build_equity_context()
+    equity_context = _build_equity_context(equity_context_symbols)
     snapshot["contexts"]["equity"] = equity_context["context"]
     spy_daily = equity_context.get("spy_daily") or []
     for symbol in equity_symbols:
@@ -107,6 +109,33 @@ def build_indicator_snapshot(system_config: dict[str, Any]) -> dict[str, Any]:
         )
 
     return _clean(snapshot)
+
+
+def resolve_watchlist(system_config: dict[str, Any], settings: Settings | None = None) -> dict[str, Any]:
+    report_config = system_config.get("report", {})
+    crypto_symbols, crypto_source = _configured_symbols(
+        settings.watchlist_crypto_symbols if settings else "",
+        report_config.get("crypto_symbols"),
+        DEFAULT_CRYPTO_SYMBOLS,
+    )
+    equity_symbols, equity_source = _configured_symbols(
+        settings.watchlist_equity_symbols if settings else "",
+        report_config.get("equity_symbols"),
+        DEFAULT_EQUITY_SYMBOLS,
+    )
+    equity_context_symbols, context_source = _configured_symbols(
+        settings.equity_context_symbols if settings else "",
+        report_config.get("equity_context_symbols"),
+        EQUITY_CONTEXT_SYMBOLS,
+    )
+    return {
+        "crypto_symbols": crypto_symbols,
+        "crypto_symbols_source": crypto_source,
+        "equity_symbols": equity_symbols,
+        "equity_symbols_source": equity_source,
+        "equity_context_symbols": equity_context_symbols,
+        "equity_context_symbols_source": context_source,
+    }
 
 
 async def archive_indicator_snapshot(
@@ -263,10 +292,10 @@ def _build_equity_snapshot(symbol: str, spy_daily: list[dict[str, Any]]) -> dict
     }
 
 
-def _build_equity_context() -> dict[str, Any]:
+def _build_equity_context(symbols: list[str]) -> dict[str, Any]:
     context: dict[str, Any] = {}
     spy_daily: list[dict[str, Any]] = []
-    for symbol in EQUITY_CONTEXT_SYMBOLS:
+    for symbol in symbols:
         try:
             daily = _yahoo_chart(symbol, "1d", "1y")
             hourly = _yahoo_chart(symbol, "60m", "3mo")
@@ -282,6 +311,44 @@ def _build_equity_context() -> dict[str, Any]:
         except Exception as exc:
             context[symbol] = {"status": "error", "error": _brief_error(exc)}
     return {"context": context, "spy_daily": spy_daily}
+
+
+def _configured_symbols(env_value: str, yaml_value: Any, default: list[str]) -> tuple[list[str], str]:
+    env_symbols = _parse_symbol_list(env_value)
+    if env_symbols:
+        return env_symbols, "env"
+    yaml_symbols = _normalize_symbol_list(yaml_value)
+    if yaml_symbols:
+        return yaml_symbols, "yaml"
+    return list(default), "default"
+
+
+def _parse_symbol_list(value: str) -> list[str]:
+    if not value:
+        return []
+    normalized = value.replace(";", ",").replace("\n", ",").replace("\t", ",")
+    parts: list[str] = []
+    for chunk in normalized.split(","):
+        parts.extend(chunk.split())
+    return _normalize_symbol_list(parts)
+
+
+def _normalize_symbol_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return _parse_symbol_list(value)
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        symbol = str(item).strip().upper()
+        if not symbol or symbol in seen:
+            continue
+        seen.add(symbol)
+        result.append(symbol)
+    return result
 
 
 def _indicator_pack(candles: list[dict[str, Any]], timeframe: str, include_profile: bool = True) -> dict[str, Any]:

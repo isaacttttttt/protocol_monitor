@@ -33,3 +33,4 @@ report:
   use_deepseek_analysis: true
   crypto_symbols: ["ETHUSDT", "BTCUSDT"]
   equity_symbols: ["CRCL", "WDC", "ARM", "INTU", "INFQ"]
+  equity_context_symbols: ["SPY", "QQQ", "IWM", "XLK", "SMH"]

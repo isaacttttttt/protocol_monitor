@@ -51,6 +51,9 @@ BINANCE_WS_BASE=wss://fstream.binance.com/ws
 BINANCE_REST_BASE=https://fapi.binance.com
 OKX_REST_BASE=https://www.okx.com
 YAHOO_CHART_BASE=https://query1.finance.yahoo.com/v8/finance/chart
+WATCHLIST_CRYPTO_SYMBOLS=ETHUSDT,BTCUSDT
+WATCHLIST_EQUITY_SYMBOLS=CRCL,WDC,ARM,INTU,INFQ
+EQUITY_CONTEXT_SYMBOLS=SPY,QQQ,IWM,XLK,SMH
 DEEPSEEK_API_KEY=
 DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_MODEL=deepseek-v4-pro
@@ -65,6 +68,12 @@ EQUITY_PROTOCOL_PATH=protocols/equity_smartmoney_protocol_v17.md
 ```
 
 All tokens and webhook secrets live in this configuration layer. Do not edit them into Python files.
+
+Watchlist variables override `configs/system.yaml`. Use comma, semicolon, newline, or spaces as separators. For example:
+
+```env
+WATCHLIST_EQUITY_SYMBOLS=CRCL,WDC,ARM,NVDA,TSLA
+```
 
 ## Telegram Setup
 
@@ -184,7 +193,10 @@ report:
   use_deepseek_analysis: true
   crypto_symbols: ["ETHUSDT", "BTCUSDT"]
   equity_symbols: ["CRCL", "WDC", "ARM", "INTU", "INFQ"]
+  equity_context_symbols: ["SPY", "QQQ", "IWM", "XLK", "SMH"]
 ```
+
+On Railway, prefer changing `WATCHLIST_CRYPTO_SYMBOLS` and `WATCHLIST_EQUITY_SYMBOLS` in Variables instead of editing this YAML.
 
 If `DEEPSEEK_API_KEY` is empty, the report command still fetches market data, calculates indicators, archives the snapshot, and prints a configuration warning. Once the key is present, the same command calls DeepSeek and sends the full protocol report.
 

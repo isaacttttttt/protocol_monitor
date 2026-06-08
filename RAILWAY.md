@@ -32,6 +32,9 @@ BINANCE_WS_BASE=wss://fstream.binance.com/ws
 BINANCE_REST_BASE=https://fapi.binance.com
 OKX_REST_BASE=https://www.okx.com
 YAHOO_CHART_BASE=https://query1.finance.yahoo.com/v8/finance/chart
+WATCHLIST_CRYPTO_SYMBOLS=ETHUSDT,BTCUSDT
+WATCHLIST_EQUITY_SYMBOLS=CRCL,WDC,ARM,INTU,INFQ
+EQUITY_CONTEXT_SYMBOLS=SPY,QQQ,IWM,XLK,SMH
 DEEPSEEK_API_KEY=<your-deepseek-api-key>
 DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_MODEL=deepseek-v4-pro
@@ -46,6 +49,8 @@ EQUITY_PROTOCOL_PATH=protocols/equity_smartmoney_protocol_v17.md
 ```
 
 `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` can stay empty unless you also want Telegram.
+
+To add or remove monitored symbols, edit `WATCHLIST_CRYPTO_SYMBOLS` and `WATCHLIST_EQUITY_SYMBOLS` in Railway Variables and redeploy/restart the Cron service. No code push is needed.
 
 Crypto reports try Binance USD-M first. If the Railway region receives Binance `HTTP 451`, the report automatically falls back to OKX public swap data, then Yahoo spot crypto data.
 

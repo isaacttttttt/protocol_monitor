@@ -25,7 +25,7 @@ async def build_llm_protocol_report(
     recent_signals: list[dict[str, Any]],
     archive_repository: Any | None = None,
 ) -> tuple[str, str]:
-    snapshot = build_indicator_snapshot(system_config)
+    snapshot = build_indicator_snapshot(system_config, settings)
     snapshot["monitor_window"] = {
         "hours": hours,
         "kline_records_in_db": kline_count,

@@ -5,7 +5,7 @@ import pytest
 
 from app.config.settings import Settings
 from app.review import llm_protocol_report
-from app.review.indicator_snapshot import _indicator_pack, compact_snapshot_for_llm
+from app.review.indicator_snapshot import _indicator_pack, compact_snapshot_for_llm, resolve_watchlist
 
 
 def _candles(count: int = 50):
@@ -69,6 +69,29 @@ def test_compact_snapshot_for_llm_removes_volume_profile_bins():
     assert "llm_payload_note" in compact
 
 
+def test_watchlist_env_overrides_yaml_symbols():
+    settings = Settings(
+        watchlist_crypto_symbols="ethusdt, solusdt btcusdt",
+        watchlist_equity_symbols="crcl; arm\nwdc,CRCL",
+        equity_context_symbols="spy, qqq, xbi",
+    )
+    system_config = {
+        "report": {
+            "crypto_symbols": ["BTCUSDT"],
+            "equity_symbols": ["INTU"],
+            "equity_context_symbols": ["SPY", "SMH"],
+        }
+    }
+
+    watchlist = resolve_watchlist(system_config, settings)
+
+    assert watchlist["crypto_symbols"] == ["ETHUSDT", "SOLUSDT", "BTCUSDT"]
+    assert watchlist["crypto_symbols_source"] == "env"
+    assert watchlist["equity_symbols"] == ["CRCL", "ARM", "WDC"]
+    assert watchlist["equity_symbols_source"] == "env"
+    assert watchlist["equity_context_symbols"] == ["SPY", "QQQ", "XBI"]
+
+
 @pytest.mark.asyncio
 async def test_missing_deepseek_key_still_archives_snapshot(tmp_path, monkeypatch):
     snapshot = {
@@ -95,7 +118,7 @@ async def test_missing_deepseek_key_still_archives_snapshot(tmp_path, monkeypatc
         async def save_snapshot(self, payload):
             saved["payload"] = payload
 
-    monkeypatch.setattr(llm_protocol_report, "build_indicator_snapshot", lambda _system_config: dict(snapshot))
+    monkeypatch.setattr(llm_protocol_report, "build_indicator_snapshot", lambda _system_config, _settings=None: dict(snapshot))
     settings = Settings(
         deepseek_api_key="",
         indicator_archive_path=str(archive_path),

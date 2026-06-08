@@ -17,6 +17,8 @@ SPM calculates indicators first, archives the full snapshot, then sends the snap
 
 Current watchlist: `ETHUSDT`, `BTCUSDT`.
 
+Configured by `WATCHLIST_CRYPTO_SYMBOLS` in env, with `configs/system.yaml` as fallback.
+
 Timeframes:
 
 - `5m`
@@ -100,6 +102,8 @@ Unavailable or proxy-only crypto fields:
 
 Current watchlist: `CRCL`, `WDC`, `ARM`, `INTU`, `INFQ`.
 
+Configured by `WATCHLIST_EQUITY_SYMBOLS` in env, with `configs/system.yaml` as fallback.
+
 Timeframes:
 
 - `15m`
@@ -172,6 +176,8 @@ Equity context symbols:
 - `IWM`
 - `XLK`
 - `SMH`
+
+Configured by `EQUITY_CONTEXT_SYMBOLS` in env, with `configs/system.yaml` as fallback.
 
 Context indicators:
 

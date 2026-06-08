@@ -12,6 +12,7 @@ Use this skill for the local SPM repository.
 - Preserve monitor-only behavior. Do not add automatic trading or private exchange account operations.
 - Keep all secrets in `.env`, Railway Variables, or configuration files. Never hard-code Binance, OKX, Telegram, Feishu, DeepSeek, or other tokens.
 - The periodic report path is indicator-first: fetch data -> calculate indicators -> archive snapshot -> send indicators and protocol text to DeepSeek -> send Feishu/Telegram report.
+- Watchlists should be changed through env variables (`WATCHLIST_CRYPTO_SYMBOLS`, `WATCHLIST_EQUITY_SYMBOLS`, `EQUITY_CONTEXT_SYMBOLS`) before changing YAML or code.
 - Keep deterministic strategy conditions in `configs/strategies/*.yaml` plus strategy classes under `app/strategies`; do not bury them in `app/main.py`.
 - Do not reintroduce hand-written protocol-analysis conclusions into the report path. Code should calculate indicators and data quality; the LLM should produce the protocol judgment.
 - Prefer small, readable Python modules over framework-heavy abstractions.
