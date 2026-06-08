@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import aiohttp
@@ -53,12 +54,17 @@ class DeepSeekClient:
             "Content-Type": "application/json",
         }
         timeout = aiohttp.ClientTimeout(total=self.timeout_seconds)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(f"{self.base_url}/chat/completions", json=payload, headers=headers) as response:
-                text = await response.text()
-                if response.status >= 400:
-                    raise RuntimeError(f"DeepSeek API HTTP {response.status}: {text[:500]}")
-                data = await response.json()
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(f"{self.base_url}/chat/completions", json=payload, headers=headers) as response:
+                    text = await response.text()
+                    if response.status >= 400:
+                        raise RuntimeError(f"DeepSeek API HTTP {response.status}: {text[:500] or '<empty response body>'}")
+                    data = await response.json()
+        except asyncio.TimeoutError as exc:
+            raise RuntimeError(f"DeepSeek API timeout after {self.timeout_seconds}s") from exc
+        except aiohttp.ClientError as exc:
+            raise RuntimeError(f"DeepSeek API request failed: {exc.__class__.__name__}: {exc}") from exc
         choices = data.get("choices") or []
         if not choices:
             raise RuntimeError("DeepSeek API returned no choices")

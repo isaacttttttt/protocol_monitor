@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 import math
 from datetime import datetime, timezone
@@ -128,6 +129,16 @@ def summarize_snapshot_for_report(snapshot: dict[str, Any]) -> list[str]:
     return lines
 
 
+def compact_snapshot_for_llm(snapshot: dict[str, Any]) -> dict[str, Any]:
+    compact = deepcopy(snapshot)
+    compact["llm_payload_note"] = (
+        "This is a compact copy for DeepSeek. Full indicator snapshots are archived locally/database; "
+        "volume profile bins and other bulky raw details are omitted here."
+    )
+    _drop_heavy_fields(compact)
+    return compact
+
+
 def _safe_build(builder: Any, symbol: str, market: str) -> dict[str, Any]:
     try:
         return builder()
@@ -139,6 +150,16 @@ def _safe_build(builder: Any, symbol: str, market: str) -> dict[str, Any]:
             "error": _brief_error(exc),
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
+
+
+def _drop_heavy_fields(value: Any) -> None:
+    if isinstance(value, dict):
+        value.pop("bins", None)
+        for item in value.values():
+            _drop_heavy_fields(item)
+    elif isinstance(value, list):
+        for item in value:
+            _drop_heavy_fields(item)
 
 
 def _build_crypto_snapshot(symbol: str) -> dict[str, Any]:

@@ -11,6 +11,7 @@ from app.llm.deepseek import DeepSeekClient
 from app.review.indicator_snapshot import (
     archive_indicator_snapshot,
     build_indicator_snapshot,
+    compact_snapshot_for_llm,
     summarize_snapshot_for_report,
 )
 
@@ -42,7 +43,7 @@ async def build_llm_protocol_report(
     try:
         crypto_protocol = _read_protocol(settings.crypto_protocol_path)
         equity_protocol = _read_protocol(settings.equity_protocol_path)
-        body = await client.chat(_messages(hours, snapshot, crypto_protocol, equity_protocol))
+        body = await client.chat(_messages(hours, compact_snapshot_for_llm(snapshot), crypto_protocol, equity_protocol))
     except Exception as exc:
         return title, _llm_error_body(exc, snapshot)
 

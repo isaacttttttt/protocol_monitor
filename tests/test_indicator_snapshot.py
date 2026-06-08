@@ -5,7 +5,7 @@ import pytest
 
 from app.config.settings import Settings
 from app.review import llm_protocol_report
-from app.review.indicator_snapshot import _indicator_pack
+from app.review.indicator_snapshot import _indicator_pack, compact_snapshot_for_llm
 
 
 def _candles(count: int = 50):
@@ -46,6 +46,17 @@ def test_indicator_pack_contains_protocol_metrics():
     assert "ad_line" in pack["flow"]
     assert "nvi" in pack["flow"]
     assert "swept_recent_high_and_closed_back_inside" in pack["liquidity"]
+
+
+def test_compact_snapshot_for_llm_removes_volume_profile_bins():
+    pack = _indicator_pack(_candles(), "15m")
+    snapshot = {"symbols": {"crypto": [{"timeframes": {"15m": pack}}]}}
+
+    compact = compact_snapshot_for_llm(snapshot)
+
+    assert "bins" in snapshot["symbols"]["crypto"][0]["timeframes"]["15m"]["volume_profile"]
+    assert "bins" not in compact["symbols"]["crypto"][0]["timeframes"]["15m"]["volume_profile"]
+    assert "llm_payload_note" in compact
 
 
 @pytest.mark.asyncio

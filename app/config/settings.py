@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     deepseek_reasoning_effort: str = "max"
     deepseek_temperature: float = 0.2
     deepseek_max_tokens: int = 6000
-    deepseek_timeout_seconds: int = 120
+    deepseek_timeout_seconds: int = 300
     indicator_archive_path: str = "data/indicator_snapshots.jsonl"
     crypto_protocol_path: str = "protocols/crypto_smartmoney_protocol_v16.md"
     equity_protocol_path: str = "protocols/equity_smartmoney_protocol_v17.md"
