@@ -5,7 +5,7 @@ import json
 import math
 from datetime import datetime, timezone
 from pathlib import Path
-from statistics import pstdev
+from statistics import median, pstdev
 from typing import Any
 from uuid import uuid4
 
@@ -31,7 +31,7 @@ def build_indicator_snapshot(system_config: dict[str, Any]) -> dict[str, Any]:
     equity_symbols = report_config.get("equity_symbols") or DEFAULT_EQUITY_SYMBOLS
 
     snapshot: dict[str, Any] = {
-        "schema_version": 2,
+        "schema_version": 3,
         "run_id": datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S") + "-" + uuid4().hex[:8],
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "mode": "indicator_snapshot_only",
@@ -42,6 +42,8 @@ def build_indicator_snapshot(system_config: dict[str, Any]) -> dict[str, Any]:
             "options_flow": "unavailable from current public data connectors",
             "gamma_exposure": "unavailable from current public data connectors",
             "volume_profile": "approximated from candle typical price and candle volume",
+            "delta_flow": "proxy only; uses close location value, candle body direction and volume",
+            "smart_money": "proxy only; FVG/order-block/displacement/liquidity pools inferred from OHLCV",
         },
         "protocol_indicator_coverage": {
             "crypto": [
@@ -53,6 +55,12 @@ def build_indicator_snapshot(system_config: dict[str, Any]) -> dict[str, Any]:
                 "anchored VWAP",
                 "volume profile POC/HVN/LVN",
                 "CVD proxy",
+                "delta flow proxy",
+                "CVD divergence",
+                "absorption / effort-result proxy",
+                "FVG / order block / displacement proxy",
+                "equal highs/lows liquidity pools",
+                "delta volume profile",
                 "NVI",
                 "funding",
                 "open interest",
@@ -68,6 +76,12 @@ def build_indicator_snapshot(system_config: dict[str, Any]) -> dict[str, Any]:
                 "anchored VWAP",
                 "volume profile POC/HVN/LVN",
                 "CVD proxy",
+                "delta flow proxy",
+                "CVD divergence",
+                "absorption / effort-result proxy",
+                "FVG / order block / displacement proxy",
+                "equal highs/lows liquidity pools",
+                "delta volume profile",
                 "OBV",
                 "A/D line",
                 "NVI",
@@ -280,6 +294,10 @@ def _indicator_pack(candles: list[dict[str, Any]], timeframe: str, include_profi
     atr = float(state["atr"])
     volume_sma20 = _sma(volumes, 20)
     relative_volume = volumes[-1] / volume_sma20 if volume_sma20 else None
+    vwap = _vwap(candles)
+    smart_money = _smart_money_pack(candles, atr)
+    delta_flow = _delta_flow_pack(candles)
+    volume_profile = _volume_profile(candles) if include_profile else None
     pack = {
         "timeframe": timeframe,
         "bar_count": len(candles),
@@ -296,7 +314,7 @@ def _indicator_pack(candles: list[dict[str, Any]], timeframe: str, include_profi
         "macd": state["macd"],
         "rsi14": _rsi(closes),
         "squeeze": _squeeze(candles),
-        "vwap": _vwap(candles),
+        "vwap": vwap,
         "anchored_vwap": {
             "from_recent_low": _anchored_vwap(candles, "low"),
             "from_recent_high": _anchored_vwap(candles, "high"),
@@ -311,11 +329,15 @@ def _indicator_pack(candles: list[dict[str, Any]], timeframe: str, include_profi
             "obv": _obv(candles),
             "ad_line": _ad_line(candles),
             "nvi": _nvi(candles),
+            "delta_flow": delta_flow,
         },
         "liquidity": _liquidity_proxy(candles),
+        "smart_money": smart_money,
     }
-    if include_profile:
-        pack["volume_profile"] = _volume_profile(candles)
+    if volume_profile is not None:
+        pack["volume_profile"] = volume_profile
+        pack["volume_delta_profile"] = _volume_delta_profile(candles)
+    pack["confluence"] = _confluence_pack(candles, state, atr, vwap, volume_profile, delta_flow, smart_money)
     return pack
 
 
@@ -428,6 +450,503 @@ def _nvi(candles: list[dict[str, Any]]) -> dict[str, float | str | None]:
         series.append(value)
     slope = series[-1] - series[-11] if len(series) >= 11 else None
     return {"value": value, "slope_10": slope, "trend": _trend_label(slope)}
+
+
+def _delta_flow_pack(candles: list[dict[str, Any]], lookback: int = 50) -> dict[str, Any]:
+    window = candles[-lookback:] if len(candles) > lookback else candles
+    if not window:
+        return {"status": "empty"}
+    rows = [_delta_row(candle) for candle in window]
+    deltas = [row["hybrid_delta"] for row in rows]
+    cvd = _cumulative(deltas)
+    last_row = rows[-1]
+    last_delta = deltas[-1]
+    delta_sma5 = _sma(deltas, 5)
+    delta_sma20 = _sma(deltas, 20)
+    delta_zscore = _zscore(last_delta, deltas[-20:])
+    slope_5 = _slope(cvd, 5)
+    slope_20 = _slope(cvd, 20)
+    previous_slope_5 = _previous_slope(cvd, 5)
+    acceleration = slope_5 - previous_slope_5 if slope_5 is not None and previous_slope_5 is not None else None
+    return {
+        "method": "hybrid proxy: 60% close-location delta + 40% candle-body delta",
+        "last": {
+            "close_location_value": last_row["clv"],
+            "body_ratio": last_row["body_ratio"],
+            "buy_volume_proxy": last_row["buy_volume_proxy"],
+            "sell_volume_proxy": last_row["sell_volume_proxy"],
+            "clv_delta": last_row["clv_delta"],
+            "body_delta": last_row["body_delta"],
+            "signed_volume_delta": last_row["signed_volume_delta"],
+            "hybrid_delta": last_delta,
+            "imbalance_ratio": _safe_div(last_delta, last_row["volume"]),
+        },
+        "delta_sma5": delta_sma5,
+        "delta_sma20": delta_sma20,
+        "delta_zscore20": delta_zscore,
+        "cumulative_delta_20": sum(deltas[-20:]) if deltas else 0.0,
+        "cumulative_delta_50": cvd[-1] if cvd else 0.0,
+        "cvd_slope_5": slope_5,
+        "cvd_slope_20": slope_20,
+        "cvd_acceleration": acceleration,
+        "cvd_trend": _trend_label(slope_5),
+        "stacked_delta": _stacked_delta(deltas),
+        "divergence": _cvd_divergence(window, cvd),
+        "absorption": _absorption_pack(window, rows, delta_zscore),
+    }
+
+
+def _delta_row(candle: dict[str, Any]) -> dict[str, float]:
+    open_ = float(candle["open"])
+    high = float(candle["high"])
+    low = float(candle["low"])
+    close = float(candle["close"])
+    volume = float(candle.get("volume") or 0.0)
+    full_range = max(high - low, 1e-12)
+    clv = _clamp(((close - low) - (high - close)) / full_range, -1.0, 1.0)
+    body_ratio = _clamp((close - open_) / full_range, -1.0, 1.0)
+    signed_volume_delta = volume if close > open_ else -volume if close < open_ else 0.0
+    clv_delta = clv * volume
+    body_delta = body_ratio * volume
+    hybrid_delta = clv_delta * 0.6 + body_delta * 0.4
+    buy_volume = volume * _clamp((clv + 1) / 2, 0.0, 1.0)
+    return {
+        "volume": volume,
+        "clv": clv,
+        "body_ratio": body_ratio,
+        "clv_delta": clv_delta,
+        "body_delta": body_delta,
+        "signed_volume_delta": signed_volume_delta,
+        "hybrid_delta": hybrid_delta,
+        "buy_volume_proxy": buy_volume,
+        "sell_volume_proxy": volume - buy_volume,
+    }
+
+
+def _absorption_pack(candles: list[dict[str, Any]], delta_rows: list[dict[str, float]], delta_zscore: float | None) -> dict[str, Any]:
+    if not candles:
+        return {"status": "empty"}
+    last = candles[-1]
+    last_delta = delta_rows[-1]["hybrid_delta"]
+    volumes = [float(candle.get("volume") or 0.0) for candle in candles]
+    ranges = [max(float(candle["high"]) - float(candle["low"]), 1e-12) for candle in candles]
+    returns = [abs(_return_pct(float(previous["close"]), float(current["close"])) or 0.0) for previous, current in zip(candles, candles[1:])]
+    volume_rel = _safe_div(volumes[-1], _sma(volumes, 20) or 0.0)
+    range_rel = _safe_div(ranges[-1], median(ranges[-20:]) if ranges else 0.0)
+    close_position = _close_position(last)
+    wick = _wick_ratios(last)
+    median_abs_return = median(returns[-20:]) if returns else 0.0
+    last_abs_return = returns[-1] if returns else 0.0
+    buy_absorption = bool((delta_zscore or 0.0) > 1.0 and close_position < 0.45 and wick["upper_wick_ratio"] > 0.35)
+    sell_absorption = bool((delta_zscore or 0.0) < -1.0 and close_position > 0.55 and wick["lower_wick_ratio"] > 0.35)
+    return {
+        "volume_rel20": volume_rel,
+        "range_rel20": range_rel,
+        "close_position": close_position,
+        "upper_wick_ratio": wick["upper_wick_ratio"],
+        "lower_wick_ratio": wick["lower_wick_ratio"],
+        "effort_no_result": bool((volume_rel or 0.0) > 1.5 and last_abs_return <= median_abs_return),
+        "stopping_volume": bool((volume_rel or 0.0) > 1.8 and (range_rel or 0.0) < 0.75),
+        "climax_volume": bool((volume_rel or 0.0) > 2.0 and (range_rel or 0.0) > 1.35),
+        "buy_absorption_proxy": buy_absorption,
+        "sell_absorption_proxy": sell_absorption,
+        "absorption_label": "BUY_ABSORBED" if buy_absorption else "SELL_ABSORBED" if sell_absorption else "NONE",
+        "last_delta": last_delta,
+    }
+
+
+def _cvd_divergence(candles: list[dict[str, Any]], cvd: list[float], lookback: int = 20) -> dict[str, Any]:
+    if len(candles) <= 3 or len(cvd) <= 3:
+        return {"status": "insufficient_data"}
+    span = min(lookback, len(candles) - 1)
+    previous_candles = candles[-span - 1 : -1]
+    previous_cvd = cvd[-span - 1 : -1]
+    last = candles[-1]
+    price_higher_high = float(last["high"]) > max(float(candle["high"]) for candle in previous_candles)
+    price_lower_low = float(last["low"]) < min(float(candle["low"]) for candle in previous_candles)
+    cvd_lower_high = cvd[-1] < max(previous_cvd) if previous_cvd else False
+    cvd_higher_low = cvd[-1] > min(previous_cvd) if previous_cvd else False
+    return {
+        "lookback": span,
+        "bearish_regular": bool(price_higher_high and cvd_lower_high),
+        "bullish_regular": bool(price_lower_low and cvd_higher_low),
+        "price_higher_high": price_higher_high,
+        "price_lower_low": price_lower_low,
+        "cvd_lower_high": cvd_lower_high,
+        "cvd_higher_low": cvd_higher_low,
+        "current_cvd": cvd[-1],
+    }
+
+
+def _smart_money_pack(candles: list[dict[str, Any]], atr: float) -> dict[str, Any]:
+    return {
+        "displacement": _displacement_pack(candles),
+        "fair_value_gaps": _fvg_pack(candles, atr),
+        "order_blocks": _order_block_pack(candles),
+        "liquidity_pools": _liquidity_pools_pack(candles, atr),
+        "premium_discount": _premium_discount_pack(candles),
+    }
+
+
+def _displacement_pack(candles: list[dict[str, Any]], lookback: int = 40) -> dict[str, Any]:
+    window = candles[-lookback:] if len(candles) > lookback else candles
+    if not window:
+        return {"status": "empty"}
+    ranges = [max(float(candle["high"]) - float(candle["low"]), 1e-12) for candle in window]
+    volumes = [float(candle.get("volume") or 0.0) for candle in window]
+    avg_range = sum(ranges) / len(ranges)
+    volume_sma = _sma(volumes, 20) or 0.0
+    events = []
+    for candle in window:
+        direction = _displacement_direction(candle, avg_range, volume_sma)
+        if direction == "NONE":
+            continue
+        full_range = max(float(candle["high"]) - float(candle["low"]), 1e-12)
+        body = abs(float(candle["close"]) - float(candle["open"]))
+        events.append(
+            {
+                "time": candle["time"],
+                "direction": direction,
+                "body_to_range": body / full_range,
+                "range_rel": full_range / avg_range if avg_range else None,
+                "volume_rel20": _safe_div(float(candle.get("volume") or 0.0), volume_sma),
+            }
+        )
+    return {
+        "count": len(events),
+        "last": events[-1] if events else None,
+        "recent": events[-5:],
+    }
+
+
+def _fvg_pack(candles: list[dict[str, Any]], atr: float, lookback: int = 80) -> dict[str, Any]:
+    if len(candles) < 3:
+        return {"active": [], "recent": []}
+    start = max(2, len(candles) - lookback)
+    gaps = []
+    for index in range(start, len(candles)):
+        left = candles[index - 2]
+        current = candles[index]
+        left_high = float(left["high"])
+        left_low = float(left["low"])
+        current_high = float(current["high"])
+        current_low = float(current["low"])
+        if current_low > left_high:
+            gap = _fvg_record("bullish", candles, index, left_high, current_low, atr)
+            gaps.append(gap)
+        if current_high < left_low:
+            gap = _fvg_record("bearish", candles, index, current_high, left_low, atr)
+            gaps.append(gap)
+    active = [gap for gap in gaps if not gap["fully_mitigated"]]
+    return {"active": active[-5:], "recent": gaps[-5:]}
+
+
+def _fvg_record(direction: str, candles: list[dict[str, Any]], index: int, gap_low: float, gap_high: float, atr: float) -> dict[str, Any]:
+    later = candles[index + 1 :]
+    if direction == "bullish":
+        touched = any(float(candle["low"]) <= gap_high for candle in later)
+        fully_mitigated = any(float(candle["low"]) <= gap_low for candle in later)
+    else:
+        touched = any(float(candle["high"]) >= gap_low for candle in later)
+        fully_mitigated = any(float(candle["high"]) >= gap_high for candle in later)
+    width = gap_high - gap_low
+    return {
+        "time": candles[index]["time"],
+        "direction": direction,
+        "gap_low": gap_low,
+        "gap_high": gap_high,
+        "mid": (gap_low + gap_high) / 2,
+        "width": width,
+        "width_atr": _safe_div(width, atr),
+        "touched": touched,
+        "fully_mitigated": fully_mitigated,
+    }
+
+
+def _order_block_pack(candles: list[dict[str, Any]], lookback: int = 80) -> dict[str, Any]:
+    window = candles[-lookback:] if len(candles) > lookback else candles
+    if len(window) < 5:
+        return {"bullish_recent": [], "bearish_recent": []}
+    ranges = [max(float(candle["high"]) - float(candle["low"]), 1e-12) for candle in window]
+    volumes = [float(candle.get("volume") or 0.0) for candle in window]
+    avg_range = sum(ranges) / len(ranges)
+    volume_sma = _sma(volumes, 20) or 0.0
+    bullish = []
+    bearish = []
+    for index, candle in enumerate(window):
+        direction = _displacement_direction(candle, avg_range, volume_sma)
+        if direction == "BULLISH":
+            block = _find_prior_opposite_candle(window, index, want_bearish=True)
+            if block:
+                bullish.append(_order_block_record(block, window, index, "bullish"))
+        elif direction == "BEARISH":
+            block = _find_prior_opposite_candle(window, index, want_bearish=False)
+            if block:
+                bearish.append(_order_block_record(block, window, index, "bearish"))
+    return {
+        "bullish_recent": bullish[-3:],
+        "bearish_recent": bearish[-3:],
+        "last_bullish": bullish[-1] if bullish else None,
+        "last_bearish": bearish[-1] if bearish else None,
+    }
+
+
+def _find_prior_opposite_candle(candles: list[dict[str, Any]], index: int, want_bearish: bool) -> dict[str, Any] | None:
+    for candidate in reversed(candles[max(0, index - 8) : index]):
+        is_bearish = float(candidate["close"]) < float(candidate["open"])
+        if is_bearish == want_bearish:
+            return candidate
+    return None
+
+
+def _order_block_record(block: dict[str, Any], candles: list[dict[str, Any]], displacement_index: int, direction: str) -> dict[str, Any]:
+    zone_low = float(block["low"])
+    zone_high = float(block["high"])
+    later = candles[displacement_index + 1 :]
+    mitigated = any(float(candle["low"]) <= zone_high and float(candle["high"]) >= zone_low for candle in later)
+    return {
+        "time": block["time"],
+        "direction": direction,
+        "zone_low": zone_low,
+        "zone_high": zone_high,
+        "mid": (zone_low + zone_high) / 2,
+        "mitigated": mitigated,
+    }
+
+
+def _liquidity_pools_pack(candles: list[dict[str, Any]], atr: float, lookback: int = 80) -> dict[str, Any]:
+    window = candles[-lookback:] if len(candles) > lookback else candles
+    if len(window) < 5:
+        return {"status": "insufficient_data"}
+    close = float(window[-1]["close"])
+    tolerance = max(atr * 0.12, close * 0.001)
+    high_pools = _level_pools([float(candle["high"]) for candle in window], tolerance, close, minimum_touches=2)
+    low_pools = _level_pools([float(candle["low"]) for candle in window], tolerance, close, minimum_touches=2)
+    highs_above = [pool for pool in high_pools if pool["level"] > close]
+    lows_below = [pool for pool in low_pools if pool["level"] < close]
+    return {
+        "tolerance": tolerance,
+        "nearest_equal_high_above": min(highs_above, key=lambda item: item["distance_to_price"]) if highs_above else None,
+        "nearest_equal_low_below": min(lows_below, key=lambda item: item["distance_to_price"]) if lows_below else None,
+        "equal_highs": high_pools[-5:],
+        "equal_lows": low_pools[-5:],
+        "range_20_high": max(float(candle["high"]) for candle in window[-20:]),
+        "range_20_low": min(float(candle["low"]) for candle in window[-20:]),
+        "range_50_high": max(float(candle["high"]) for candle in window[-50:]),
+        "range_50_low": min(float(candle["low"]) for candle in window[-50:]),
+    }
+
+
+def _premium_discount_pack(candles: list[dict[str, Any]], lookback: int = 60) -> dict[str, Any]:
+    window = candles[-lookback:] if len(candles) > lookback else candles
+    high = max(float(candle["high"]) for candle in window)
+    low = min(float(candle["low"]) for candle in window)
+    close = float(window[-1]["close"])
+    equilibrium = (high + low) / 2
+    position = _safe_div(close - low, high - low)
+    label = "PREMIUM" if position is not None and position > 0.66 else "DISCOUNT" if position is not None and position < 0.33 else "EQUILIBRIUM"
+    return {
+        "lookback": len(window),
+        "range_high": high,
+        "range_low": low,
+        "equilibrium": equilibrium,
+        "position_0_to_1": position,
+        "label": label,
+    }
+
+
+def _volume_delta_profile(candles: list[dict[str, Any]], bins: int = 12, lookback: int = 120) -> dict[str, Any]:
+    window = candles[-lookback:] if len(candles) > lookback else candles
+    lows = [float(candle["low"]) for candle in window]
+    highs = [float(candle["high"]) for candle in window]
+    low = min(lows)
+    high = max(highs)
+    if math.isclose(low, high):
+        return {"delta_poc": low, "positive_delta_poc": low, "negative_delta_poc": low, "bins": []}
+    step = (high - low) / bins
+    buckets = [
+        {"low": low + step * index, "high": low + step * (index + 1), "volume": 0.0, "delta": 0.0}
+        for index in range(bins)
+    ]
+    for candle in window:
+        typical = (float(candle["high"]) + float(candle["low"]) + float(candle["close"])) / 3
+        index = min(bins - 1, max(0, int((typical - low) / step)))
+        row = _delta_row(candle)
+        buckets[index]["volume"] += row["volume"]
+        buckets[index]["delta"] += row["hybrid_delta"]
+    abs_sorted = sorted(buckets, key=lambda bucket: abs(bucket["delta"]), reverse=True)
+    positive = [bucket for bucket in buckets if bucket["delta"] > 0]
+    negative = [bucket for bucket in buckets if bucket["delta"] < 0]
+    return {
+        "lookback_bars": len(window),
+        "delta_poc": _bucket_mid(abs_sorted[0]) if abs_sorted else None,
+        "positive_delta_poc": _bucket_mid(max(positive, key=lambda bucket: bucket["delta"])) if positive else None,
+        "negative_delta_poc": _bucket_mid(min(negative, key=lambda bucket: bucket["delta"])) if negative else None,
+        "net_delta": sum(bucket["delta"] for bucket in buckets),
+        "dominant_delta_zones": [
+            {"mid": _bucket_mid(bucket), "delta": bucket["delta"], "volume": bucket["volume"]}
+            for bucket in abs_sorted[:3]
+        ],
+        "bins": buckets,
+    }
+
+
+def _confluence_pack(
+    candles: list[dict[str, Any]],
+    state: dict[str, Any],
+    atr: float,
+    vwap: float | None,
+    volume_profile: dict[str, Any] | None,
+    delta_flow: dict[str, Any],
+    smart_money: dict[str, Any],
+) -> dict[str, Any]:
+    close = float(candles[-1]["close"])
+    poc = volume_profile.get("poc") if volume_profile else None
+    flags: list[str] = []
+    divergence = delta_flow.get("divergence", {})
+    absorption = delta_flow.get("absorption", {})
+    displacement = smart_money.get("displacement", {})
+    premium_discount = smart_money.get("premium_discount", {})
+    if divergence.get("bearish_regular"):
+        flags.append("bearish_cvd_divergence_proxy")
+    if divergence.get("bullish_regular"):
+        flags.append("bullish_cvd_divergence_proxy")
+    if absorption.get("buy_absorption_proxy"):
+        flags.append("buy_absorption_proxy")
+    if absorption.get("sell_absorption_proxy"):
+        flags.append("sell_absorption_proxy")
+    if absorption.get("stopping_volume"):
+        flags.append("stopping_volume_proxy")
+    if displacement.get("last"):
+        flags.append(f"last_displacement_{displacement['last']['direction'].lower()}")
+    if premium_discount.get("label") in {"PREMIUM", "DISCOUNT"}:
+        flags.append(f"price_in_{str(premium_discount['label']).lower()}")
+    structure_trend = state["structure"]["trend"]
+    flow_trend = delta_flow.get("cvd_trend")
+    return {
+        "price_vs_vwap_pct": _return_pct(vwap, close) if vwap else None,
+        "price_vs_volume_poc_pct": _return_pct(float(poc), close) if poc is not None else None,
+        "price_vs_atr_from_poc": _safe_div(close - float(poc), atr) if poc is not None else None,
+        "structure_flow_alignment": (
+            "ALIGNED_UP" if structure_trend == "UP" and flow_trend == "UP" else
+            "ALIGNED_DOWN" if structure_trend == "DOWN" and flow_trend == "DOWN" else
+            "DIVERGENT"
+        ),
+        "ai_attention_flags": flags,
+    }
+
+
+def _cumulative(values: list[float]) -> list[float]:
+    total = 0.0
+    result = []
+    for value in values:
+        total += value
+        result.append(total)
+    return result
+
+
+def _slope(values: list[float], period: int) -> float | None:
+    if len(values) <= period:
+        return None
+    return (values[-1] - values[-period - 1]) / period
+
+
+def _previous_slope(values: list[float], period: int) -> float | None:
+    if len(values) <= period * 2:
+        return None
+    return (values[-period - 1] - values[-period * 2 - 1]) / period
+
+
+def _zscore(value: float, values: list[float]) -> float | None:
+    if len(values) < 3:
+        return None
+    mean = sum(values) / len(values)
+    std = pstdev(values)
+    if std == 0:
+        return 0.0
+    return (value - mean) / std
+
+
+def _stacked_delta(deltas: list[float]) -> dict[str, Any]:
+    if not deltas:
+        return {"direction": "NONE", "count": 0}
+    direction = "BUY" if deltas[-1] > 0 else "SELL" if deltas[-1] < 0 else "NONE"
+    count = 0
+    for value in reversed(deltas):
+        current = "BUY" if value > 0 else "SELL" if value < 0 else "NONE"
+        if current != direction:
+            break
+        count += 1
+    return {"direction": direction, "count": count}
+
+
+def _displacement_direction(candle: dict[str, Any], avg_range: float, volume_sma: float) -> str:
+    open_ = float(candle["open"])
+    close = float(candle["close"])
+    full_range = max(float(candle["high"]) - float(candle["low"]), 1e-12)
+    body_to_range = abs(close - open_) / full_range
+    close_position = _close_position(candle)
+    range_rel = full_range / avg_range if avg_range else 0.0
+    volume_rel = _safe_div(float(candle.get("volume") or 0.0), volume_sma) or 0.0
+    if body_to_range >= 0.55 and range_rel >= 1.15 and volume_rel >= 1.05:
+        if close > open_ and close_position >= 0.7:
+            return "BULLISH"
+        if close < open_ and close_position <= 0.3:
+            return "BEARISH"
+    return "NONE"
+
+
+def _level_pools(levels: list[float], tolerance: float, current_price: float, minimum_touches: int = 2) -> list[dict[str, Any]]:
+    pools: list[dict[str, Any]] = []
+    for level in sorted(levels):
+        for pool in pools:
+            if abs(level - pool["level"]) <= tolerance:
+                pool["values"].append(level)
+                pool["level"] = sum(pool["values"]) / len(pool["values"])
+                pool["touches"] = len(pool["values"])
+                break
+        else:
+            pools.append({"level": level, "values": [level], "touches": 1})
+    result = []
+    for pool in pools:
+        if pool["touches"] >= minimum_touches:
+            result.append(
+                {
+                    "level": pool["level"],
+                    "touches": pool["touches"],
+                    "distance_to_price": abs(pool["level"] - current_price),
+                }
+            )
+    return result
+
+
+def _close_position(candle: dict[str, Any]) -> float:
+    high = float(candle["high"])
+    low = float(candle["low"])
+    close = float(candle["close"])
+    return _safe_div(close - low, high - low) or 0.5
+
+
+def _wick_ratios(candle: dict[str, Any]) -> dict[str, float]:
+    open_ = float(candle["open"])
+    high = float(candle["high"])
+    low = float(candle["low"])
+    close = float(candle["close"])
+    full_range = max(high - low, 1e-12)
+    return {
+        "upper_wick_ratio": (high - max(open_, close)) / full_range,
+        "lower_wick_ratio": (min(open_, close) - low) / full_range,
+    }
+
+
+def _safe_div(numerator: float, denominator: float) -> float | None:
+    if denominator == 0:
+        return None
+    return numerator / denominator
+
+
+def _clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
 
 
 def _trend_label(slope: float | None) -> str:

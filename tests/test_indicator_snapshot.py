@@ -45,7 +45,15 @@ def test_indicator_pack_contains_protocol_metrics():
     assert "obv" in pack["flow"]
     assert "ad_line" in pack["flow"]
     assert "nvi" in pack["flow"]
+    assert "delta_flow" in pack["flow"]
     assert "swept_recent_high_and_closed_back_inside" in pack["liquidity"]
+    assert "smart_money" in pack
+    assert "fair_value_gaps" in pack["smart_money"]
+    assert "order_blocks" in pack["smart_money"]
+    assert "liquidity_pools" in pack["smart_money"]
+    assert "volume_delta_profile" in pack
+    assert "confluence" in pack
+    assert "ai_attention_flags" in pack["confluence"]
 
 
 def test_compact_snapshot_for_llm_removes_volume_profile_bins():
@@ -55,7 +63,9 @@ def test_compact_snapshot_for_llm_removes_volume_profile_bins():
     compact = compact_snapshot_for_llm(snapshot)
 
     assert "bins" in snapshot["symbols"]["crypto"][0]["timeframes"]["15m"]["volume_profile"]
+    assert "bins" in snapshot["symbols"]["crypto"][0]["timeframes"]["15m"]["volume_delta_profile"]
     assert "bins" not in compact["symbols"]["crypto"][0]["timeframes"]["15m"]["volume_profile"]
+    assert "bins" not in compact["symbols"]["crypto"][0]["timeframes"]["15m"]["volume_delta_profile"]
     assert "llm_payload_note" in compact
 
 

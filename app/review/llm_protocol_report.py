@@ -78,7 +78,7 @@ def _messages(
    - 建议2
    - Micro：方向、触发条件、失效条件、48H 时间止损
    - Macro：方向、关键收复/跌破位、是否进入观察池
-   - 关键指标证据：结构、ATR、MACD、VWAP/AVWAP、VP POC/HVN/LVN、CVD proxy/OBV/A-D/NVI、量能、Funding/OI 或相对强弱
+   - 关键指标证据：结构、ATR、MACD、VWAP/AVWAP、VP POC/HVN/LVN、Volume Delta Profile、CVD proxy/Delta Flow/背离/吸收、OBV/A-D/NVI、FVG/Order Block/Displacement/流动性池、Confluence flags、量能、Funding/OI 或相对强弱
    - 最终交易指令：当前指令、多头预警、空头预警、Macro 预警、一句话结论
 4. 对 BTC 只能作为 ETH 风险过滤器，除非协议文本要求独立分析。
 5. 对美股必须考虑 External / Index / Sector / Asset Execution 四层。

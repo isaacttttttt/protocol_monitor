@@ -57,11 +57,36 @@ Per-timeframe indicators:
 - volume SMA20
 - relative volume
 - CVD proxy: cumulative proxy, last delta, new high/low flags, trend
+- Delta Flow proxy:
+  - close-location-value delta
+  - candle-body delta
+  - signed-volume delta
+  - hybrid delta
+  - buy/sell volume proxy
+  - imbalance ratio
+  - delta SMA5 / SMA20
+  - delta z-score
+  - cumulative delta 20 / 50
+  - CVD slope 5 / 20
+  - CVD acceleration
+  - stacked delta direction/count
+  - bullish/bearish regular CVD divergence
+  - buy/sell absorption proxy
+  - effort-no-result, stopping volume, climax volume
 - OBV value / 5-bar slope / trend
 - A/D line value / 5-bar slope / trend
 - NVI value / 10-bar slope / trend
 - liquidity sweep proxy: swept recent high/low and closed back inside, previous range high/low, upper/lower wick ratio
+- Smart Money proxy:
+  - displacement count/recent/last event
+  - bullish/bearish fair value gaps and mitigation state
+  - bullish/bearish order block zones and mitigation state
+  - equal highs / equal lows liquidity pools
+  - 20/50 bar range high/low
+  - premium / discount / equilibrium position
 - volume profile proxy: POC, HVN, LVN, value-area proxy, volume bins
+- volume delta profile proxy: delta POC, positive-delta POC, negative-delta POC, net delta, dominant delta zones
+- confluence pack: price vs VWAP, price vs POC, ATR distance from POC, structure-flow alignment, AI attention flags
 
 Unavailable or proxy-only crypto fields:
 
@@ -109,11 +134,36 @@ Per-timeframe indicators:
 - volume SMA20
 - relative volume
 - CVD proxy: cumulative proxy, last delta, new high/low flags, trend
+- Delta Flow proxy:
+  - close-location-value delta
+  - candle-body delta
+  - signed-volume delta
+  - hybrid delta
+  - buy/sell volume proxy
+  - imbalance ratio
+  - delta SMA5 / SMA20
+  - delta z-score
+  - cumulative delta 20 / 50
+  - CVD slope 5 / 20
+  - CVD acceleration
+  - stacked delta direction/count
+  - bullish/bearish regular CVD divergence
+  - buy/sell absorption proxy
+  - effort-no-result, stopping volume, climax volume
 - OBV value / 5-bar slope / trend
 - A/D line value / 5-bar slope / trend
 - NVI value / 10-bar slope / trend
 - liquidity sweep proxy: swept recent high/low and closed back inside, previous range high/low, upper/lower wick ratio
+- Smart Money proxy:
+  - displacement count/recent/last event
+  - bullish/bearish fair value gaps and mitigation state
+  - bullish/bearish order block zones and mitigation state
+  - equal highs / equal lows liquidity pools
+  - 20/50 bar range high/low
+  - premium / discount / equilibrium position
 - volume profile proxy: POC, HVN, LVN, value-area proxy, volume bins
+- volume delta profile proxy: delta POC, positive-delta POC, negative-delta POC, net delta, dominant delta zones
+- confluence pack: price vs VWAP, price vs POC, ATR distance from POC, structure-flow alignment, AI attention flags
 
 Equity context symbols:
 
@@ -133,6 +183,8 @@ Context indicators:
 Unavailable or proxy-only equity fields:
 
 - real CVD
+- real footprint/cluster delta
+- real bid/ask aggressive delta
 - options flow
 - gamma exposure
 - dark-pool prints
