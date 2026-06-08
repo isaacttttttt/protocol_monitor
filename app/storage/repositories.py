@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.market.models import Kline
 from app.signals.models import Signal
-from app.storage.models import indicators, klines, notifications, signals, strategy_states
+from app.storage.models import indicator_archives, indicators, klines, notifications, signals, strategy_states
 
 
 def _decimal(value: Decimal | None) -> float | None:
@@ -166,4 +166,30 @@ class IndicatorRepository:
                 )
             )
             await session.execute(insert(indicators).values(**values))
+            await session.commit()
+
+
+class IndicatorArchiveRepository:
+    def __init__(self, session_factory: async_sessionmaker) -> None:
+        self.session_factory = session_factory
+
+    async def save_snapshot(self, payload: dict) -> None:
+        generated_at_raw = str(payload["generated_at"]).replace("Z", "+00:00")
+        generated_at = datetime.fromisoformat(generated_at_raw).replace(tzinfo=None)
+        values = {
+            "run_id": payload["run_id"],
+            "generated_at": generated_at,
+            "payload": payload,
+        }
+        async with self.session_factory() as session:
+            bind_name = session.bind.dialect.name if session.bind else ""
+            if bind_name == "postgresql":
+                stmt = pg_insert(indicator_archives).values(**values).on_conflict_do_update(
+                    index_elements=["run_id"],
+                    set_=values,
+                )
+                await session.execute(stmt)
+            else:
+                await session.execute(delete(indicator_archives).where(indicator_archives.c.run_id == payload["run_id"]))
+                await session.execute(insert(indicator_archives).values(**values))
             await session.commit()

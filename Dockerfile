@@ -10,5 +10,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 COPY configs ./configs
+COPY protocols ./protocols
 
 CMD ["python", "-m", "app.main"]

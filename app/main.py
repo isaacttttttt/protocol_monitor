@@ -12,7 +12,7 @@ from app.market.kline_store import KlineStore
 from app.review.reporter import PeriodicReporter
 from app.signals.router import SignalRouter
 from app.storage.db import create_engine, create_session_factory, init_db
-from app.storage.repositories import IndicatorRepository, KlineRepository, SignalRepository
+from app.storage.repositories import IndicatorArchiveRepository, IndicatorRepository, KlineRepository, SignalRepository
 from app.strategies.base import StrategyContext
 from app.strategies.eth_cm2_pullback_fail_short import EthCm2PullbackFailShort
 from app.strategies.eth_cm3_liquidity_sweep_long import EthCm3LiquiditySweepLong
@@ -120,7 +120,8 @@ async def run_report(hours: int | None = None, send: bool = False) -> None:
     session_factory = create_session_factory(engine)
     kline_repo = KlineRepository(session_factory)
     signal_repo = SignalRepository(session_factory)
-    reporter = PeriodicReporter(settings, system_config, kline_repo, signal_repo)
+    archive_repo = IndicatorArchiveRepository(session_factory)
+    reporter = PeriodicReporter(settings, system_config, kline_repo, signal_repo, archive_repo)
     try:
         if send:
             await reporter.send(report_hours)

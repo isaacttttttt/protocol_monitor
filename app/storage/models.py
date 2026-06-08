@@ -124,3 +124,13 @@ notifications = Table(
     Column("sent_at", DateTime),
     Column("created_at", DateTime, server_default=func.now()),
 )
+
+indicator_archives = Table(
+    "indicator_archives",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("run_id", String(64), unique=True, nullable=False),
+    Column("generated_at", DateTime, nullable=False),
+    Column("payload", JSON, nullable=False),
+    Column("created_at", DateTime, server_default=func.now()),
+)

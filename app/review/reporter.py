@@ -8,8 +8,9 @@ from app.config.settings import Settings
 from app.notifications.base import NotificationMessage
 from app.notifications.feishu import FeishuNotifier
 from app.notifications.telegram import TelegramNotifier
+from app.review.llm_protocol_report import build_llm_protocol_report
 from app.review.protocol_analysis import ProtocolAnalysis, format_protocol_section
-from app.storage.repositories import KlineRepository, SignalRepository
+from app.storage.repositories import IndicatorArchiveRepository, KlineRepository, SignalRepository
 
 
 def format_periodic_report(
@@ -18,6 +19,7 @@ def format_periodic_report(
     strategy_count: int,
     recent_signals: list[dict[str, Any]],
     protocol_analyses: list[ProtocolAnalysis] | None = None,
+    analysis_report: str | None = None,
 ) -> tuple[str, str]:
     level_counts: dict[str, int] = {}
     for signal in recent_signals:
@@ -32,8 +34,11 @@ def format_periodic_report(
         f"信号数量：{len(recent_signals)}",
         f"信号分级：{level_counts or '无'}",
     ]
-    analyses = [] if protocol_analyses is None else protocol_analyses
-    lines.extend(["", *format_protocol_section(analyses)])
+    if analysis_report is not None:
+        lines.extend(["", analysis_report])
+    else:
+        analyses = [] if protocol_analyses is None else protocol_analyses
+        lines.extend(["", *format_protocol_section(analyses)])
 
     if recent_signals:
         lines.append("")
@@ -64,25 +69,37 @@ class PeriodicReporter:
         system_config: dict[str, Any],
         kline_repository: KlineRepository,
         signal_repository: SignalRepository,
+        indicator_archive_repository: IndicatorArchiveRepository | None = None,
     ) -> None:
         self.settings = settings
         self.system_config = system_config
         self.kline_repository = kline_repository
         self.signal_repository = signal_repository
+        self.indicator_archive_repository = indicator_archive_repository
         self.notifiers = {
             "telegram": TelegramNotifier(settings),
             "feishu": FeishuNotifier(settings),
         }
 
     async def build(self, hours: int) -> tuple[str, str]:
-        from app.review.protocol_analysis import build_protocol_analyses
-
         recent_signals = await self.signal_repository.get_recent_signals(hours)
         strategy_states = await self.signal_repository.get_strategy_states()
         kline_count = await self.kline_repository.count_klines()
         report_config = self.system_config.get("report", {})
+        if report_config.get("include_protocol_analysis", True) and report_config.get("use_deepseek_analysis", True):
+            return await build_llm_protocol_report(
+                self.settings,
+                self.system_config,
+                hours,
+                kline_count,
+                len(strategy_states),
+                recent_signals,
+                self.indicator_archive_repository,
+            )
         analyses = []
         if report_config.get("include_protocol_analysis", True):
+            from app.review.protocol_analysis import build_protocol_analyses
+
             analyses = build_protocol_analyses(
                 crypto_symbols=report_config.get("crypto_symbols"),
                 equity_symbols=report_config.get("equity_symbols"),

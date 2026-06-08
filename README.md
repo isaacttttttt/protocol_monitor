@@ -1,8 +1,8 @@
 # SmartMoney Protocol Monitor
 
-SmartMoney Protocol Monitor (SPM) is a monitor-only Python service that turns the Smart Money Protocol rules in `SmartMoney Protocol Monitor.md` into a local signal engine.
+SmartMoney Protocol Monitor (SPM) is a monitor-only Python service that turns the Smart Money Protocol into an indicator archive plus DeepSeek-driven protocol report.
 
-SPM watches Binance USD-M futures market data, calculates protocol indicators, runs ETH/BTC strategy state machines, writes signals to a database, and pushes L2/L3/L4 notifications through Telegram or Feishu.
+SPM fetches external market data, calculates protocol indicators, archives the indicator snapshot, sends the snapshot plus protocol text to DeepSeek, receives the model's protocol report, and pushes the result through Feishu or Telegram.
 
 It does not place orders, manage exchange accounts, or require trading permissions.
 
@@ -13,6 +13,10 @@ It does not place orders, manage exchange accounts, or require trading permissio
 - Intervals: `1m`, `5m`, `15m`, `1h`, `4h`.
 - Kline cache and persistent storage.
 - ATR, MACD, CVD proxy, VWAP, simplified market structure.
+- Protocol report chain: external market data -> indicator snapshot -> archive -> DeepSeek -> Feishu report.
+- Crypto protocol v16 and Equity protocol v17 are versioned under `protocols/`.
+- DeepSeek API adapter using an OpenAI-compatible chat completions endpoint.
+- Indicator archive table plus local JSONL archive.
 - BTC strong bullish / strong bearish filter.
 - R/R filter, duplicate cooldown, 48H Micro time-stop helper.
 - ETH C-M2 pullback-fail short strategy.
@@ -41,10 +45,21 @@ DATABASE_URL=sqlite+aiosqlite:///./spm.db
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_CHAT_ID=
 FEISHU_WEBHOOK_URL=
+FEISHU_KEYWORD=监控报告
 BINANCE_WS_BASE=wss://fstream.binance.com/ws
 BINANCE_REST_BASE=https://fapi.binance.com
 OKX_REST_BASE=https://www.okx.com
 YAHOO_CHART_BASE=https://query1.finance.yahoo.com/v8/finance/chart
+DEEPSEEK_API_KEY=
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL=deepseek-v4-flash
+DEEPSEEK_THINKING=disabled
+DEEPSEEK_TEMPERATURE=0.2
+DEEPSEEK_MAX_TOKENS=6000
+DEEPSEEK_TIMEOUT_SECONDS=120
+INDICATOR_ARCHIVE_PATH=data/indicator_snapshots.jsonl
+CRYPTO_PROTOCOL_PATH=protocols/crypto_smartmoney_protocol_v16.md
+EQUITY_PROTOCOL_PATH=protocols/equity_smartmoney_protocol_v17.md
 ```
 
 All tokens and webhook secrets live in this configuration layer. Do not edit them into Python files.
@@ -97,7 +112,7 @@ The app reads tokens from your shell environment or `.env`.
 
 ## Railway Cron Deployment
 
-For hosted 2H Feishu reports, use Railway Cron. The repo includes `railway.toml`, which runs:
+For hosted 2H Feishu reports, Railway Cron can run this workflow because each run is a short-lived outbound HTTPS job. The repo includes `railway.toml`, which runs:
 
 ```powershell
 python -m app.main report --hours 2 --send
@@ -112,6 +127,8 @@ with cron schedule:
 See `RAILWAY.md` for the full deployment steps and required Railway variables.
 
 On hosted environments where Binance returns `HTTP 451`, crypto reports automatically fall back to OKX public swap data and then Yahoo spot crypto data.
+
+For durable indicator archives on Railway, use Railway Postgres for `DATABASE_URL`. The local JSONL archive is useful during development, but a Cron container filesystem is not a reliable long-term archive unless you attach persistent storage.
 
 ## Strategy Configuration
 
@@ -162,9 +179,12 @@ automation:
   report_interval_hours: 2
 
 report:
+  use_deepseek_analysis: true
   crypto_symbols: ["ETHUSDT", "BTCUSDT"]
   equity_symbols: ["CRCL", "WDC", "ARM", "INTU", "INFQ"]
 ```
+
+If `DEEPSEEK_API_KEY` is empty, the report command still fetches market data, calculates indicators, archives the snapshot, and prints a configuration warning. Once the key is present, the same command calls DeepSeek and sends the full protocol report.
 
 ## Codex Automation
 

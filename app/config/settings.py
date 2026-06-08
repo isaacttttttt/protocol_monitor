@@ -15,6 +15,16 @@ class Settings(BaseSettings):
     binance_rest_base: str = "https://fapi.binance.com"
     okx_rest_base: str = "https://www.okx.com"
     yahoo_chart_base: str = "https://query1.finance.yahoo.com/v8/finance/chart"
+    deepseek_api_key: str = ""
+    deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_model: str = "deepseek-v4-flash"
+    deepseek_thinking: str = "disabled"
+    deepseek_temperature: float = 0.2
+    deepseek_max_tokens: int = 6000
+    deepseek_timeout_seconds: int = 120
+    indicator_archive_path: str = "data/indicator_snapshots.jsonl"
+    crypto_protocol_path: str = "protocols/crypto_smartmoney_protocol_v16.md"
+    equity_protocol_path: str = "protocols/equity_smartmoney_protocol_v17.md"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
