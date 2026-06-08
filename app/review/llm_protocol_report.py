@@ -111,6 +111,7 @@ def _missing_key_body(settings: Settings, snapshot: dict[str, Any]) -> str:
         f"- `DEEPSEEK_BASE_URL={settings.deepseek_base_url}`",
         f"- `DEEPSEEK_MODEL={settings.deepseek_model}`",
         f"- `DEEPSEEK_THINKING={settings.deepseek_thinking}`",
+        f"- `DEEPSEEK_REASONING_EFFORT={settings.deepseek_reasoning_effort}`",
         "",
         "本轮指标快照摘要：",
         *summarize_snapshot_for_report(snapshot),
