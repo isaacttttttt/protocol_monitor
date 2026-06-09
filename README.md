@@ -123,7 +123,7 @@ The app reads tokens from your shell environment or `.env`.
 
 ## Railway Cron Deployment
 
-For hosted 1H Feishu reports, Railway Cron can run this workflow because each run is a short-lived outbound HTTPS job. The repo includes `railway.toml`, which runs:
+For scheduled Feishu reports, Railway Cron can run this workflow because each run is a short-lived outbound HTTPS job. The repo includes `railway.toml`, which runs:
 
 ```powershell
 python -m app.main report --hours 1 --send
@@ -132,8 +132,10 @@ python -m app.main report --hours 1 --send
 with cron schedule:
 
 ```text
-0 * * * *
+0 2,6,9,12,14,18 * * *
 ```
+
+Railway schedules are UTC. This maps to UTC+8 report times: 10:00, 14:00, 17:00, 20:00, 22:00, and 02:00.
 
 See `RAILWAY.md` for the full deployment steps and required Railway variables.
 

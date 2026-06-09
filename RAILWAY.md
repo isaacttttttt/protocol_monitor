@@ -1,6 +1,6 @@
 # Railway Cron Deployment
 
-This project can run on Railway as a short-lived Cron Job. Railway starts the container every 1 hour, executes the report command, calculates and archives indicators, calls DeepSeek, sends the Feishu notification, and exits.
+This project can run on Railway as a short-lived Cron Job. Railway starts the container at the configured report times, executes the report command, calculates and archives indicators, calls DeepSeek, sends the Feishu notification, and exits.
 
 ## Railway Settings
 
@@ -12,11 +12,11 @@ builder = "DOCKERFILE"
 
 [deploy]
 startCommand = "python -m app.main report --hours 1 --send"
-cronSchedule = "0 * * * *"
+cronSchedule = "0 2,6,9,12,14,18 * * *"
 restartPolicyType = "NEVER"
 ```
 
-Railway schedules are UTC. `0 * * * *` means every hour at minute 0.
+Railway schedules are UTC. `0 2,6,9,12,14,18 * * *` means 02:00, 06:00, 09:00, 12:00, 14:00, and 18:00 UTC. In UTC+8, that is 10:00, 14:00, 17:00, 20:00, 22:00, and 02:00.
 
 ## Required Variables
 
@@ -71,7 +71,7 @@ Without Postgres or a volume, the Feishu report still works, but historical indi
 3. Keep the generated service as a Cron Job service.
 4. Confirm the service settings show:
    - Start Command: `python -m app.main report --hours 1 --send`
-   - Cron Schedule: `0 * * * *`
+   - Cron Schedule: `0 2,6,9,12,14,18 * * *`
 5. Add the variables above in the service Variables tab.
 6. Deploy and open Logs to confirm the report prints and Feishu receives `SPM 1H DeepSeek 协议监控报告`.
 
