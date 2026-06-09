@@ -60,15 +60,21 @@ Per-timeframe indicators:
 - relative volume
 - CVD proxy: cumulative proxy, last delta, new high/low flags, trend
 - Delta Flow proxy:
+  - source and quality: Binance taker delta when available, otherwise OHLCV proxy
+  - taker buy volume / taker sell volume for Binance USD-M crypto candles
   - close-location-value delta
   - candle-body delta
   - signed-volume delta
   - hybrid delta
   - buy/sell volume proxy
+  - buy ratio
   - imbalance ratio
   - delta SMA5 / SMA20
   - delta z-score
+  - positive/negative delta sum over 20 bars
+  - net delta percentage over 20 bars
   - cumulative delta 20 / 50
+  - normalized cumulative delta
   - CVD slope 5 / 20
   - CVD acceleration
   - stacked delta direction/count
@@ -87,6 +93,7 @@ Per-timeframe indicators:
   - 20/50 bar range high/low
   - premium / discount / equilibrium position
 - volume profile proxy: POC, HVN, LVN, value-area proxy, volume bins
+- volume profile method: candle volume is distributed across overlapped price bins; value area expands from POC until about 70% volume coverage
 - volume delta profile proxy: delta POC, positive-delta POC, negative-delta POC, net delta, dominant delta zones
 - confluence pack: price vs VWAP, price vs POC, ATR distance from POC, structure-flow alignment, AI attention flags
 
@@ -139,15 +146,20 @@ Per-timeframe indicators:
 - relative volume
 - CVD proxy: cumulative proxy, last delta, new high/low flags, trend
 - Delta Flow proxy:
+  - source and quality: Binance taker delta when available, otherwise OHLCV proxy
   - close-location-value delta
   - candle-body delta
   - signed-volume delta
   - hybrid delta
   - buy/sell volume proxy
+  - buy ratio
   - imbalance ratio
   - delta SMA5 / SMA20
   - delta z-score
+  - positive/negative delta sum over 20 bars
+  - net delta percentage over 20 bars
   - cumulative delta 20 / 50
+  - normalized cumulative delta
   - CVD slope 5 / 20
   - CVD acceleration
   - stacked delta direction/count
@@ -166,6 +178,7 @@ Per-timeframe indicators:
   - 20/50 bar range high/low
   - premium / discount / equilibrium position
 - volume profile proxy: POC, HVN, LVN, value-area proxy, volume bins
+- volume profile method: candle volume is distributed across overlapped price bins; value area expands from POC until about 70% volume coverage
 - volume delta profile proxy: delta POC, positive-delta POC, negative-delta POC, net delta, dominant delta zones
 - confluence pack: price vs VWAP, price vs POC, ATR distance from POC, structure-flow alignment, AI attention flags
 

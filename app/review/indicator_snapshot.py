@@ -38,13 +38,14 @@ def build_indicator_snapshot(system_config: dict[str, Any], settings: Settings |
         "mode": "indicator_snapshot_only",
         "watchlist": watchlist,
         "indicator_quality": {
-            "real_cvd": "unavailable; cvd_proxy uses candle direction x volume",
+            "real_cvd": "full footprint CVD unavailable; Binance crypto uses taker buy/sell delta when available, other sources use OHLCV proxy",
+            "binance_taker_delta": "available for Binance USD-M crypto candles; taker_buy_volume - taker_sell_volume",
             "cluster_delta": "unavailable from current public data connectors",
             "liquidation_heatmap": "unavailable from current public data connectors",
             "options_flow": "unavailable from current public data connectors",
             "gamma_exposure": "unavailable from current public data connectors",
             "volume_profile": "approximated from candle typical price and candle volume",
-            "delta_flow": "proxy only; uses close location value, candle body direction and volume",
+            "delta_flow": "taker buy/sell when available; otherwise close location value, candle body direction and volume",
             "smart_money": "proxy only; FVG/order-block/displacement/liquidity pools inferred from OHLCV",
         },
         "protocol_indicator_coverage": {
@@ -416,6 +417,10 @@ def _last_bar(candle: dict[str, Any]) -> dict[str, Any]:
         "low": float(candle["low"]),
         "close": float(candle["close"]),
         "volume": float(candle.get("volume") or 0.0),
+        "quote_volume": _optional_float(candle.get("quote_volume")),
+        "trade_count": candle.get("trade_count"),
+        "taker_buy_volume": _optional_float(candle.get("taker_buy_volume")),
+        "taker_sell_volume": _optional_taker_sell_volume(candle),
     }
 
 
@@ -536,23 +541,33 @@ def _delta_flow_pack(candles: list[dict[str, Any]], lookback: int = 50) -> dict[
     previous_slope_5 = _previous_slope(cvd, 5)
     acceleration = slope_5 - previous_slope_5 if slope_5 is not None and previous_slope_5 is not None else None
     return {
-        "method": "hybrid proxy: 60% close-location delta + 40% candle-body delta",
+        "method": last_row["method"],
+        "source": _delta_source_summary(rows),
+        "quality": "TAKER_DELTA" if last_row["source"] == "taker_buy_volume" else "OHLCV_PROXY",
         "last": {
+            "source": last_row["source"],
             "close_location_value": last_row["clv"],
             "body_ratio": last_row["body_ratio"],
             "buy_volume_proxy": last_row["buy_volume_proxy"],
             "sell_volume_proxy": last_row["sell_volume_proxy"],
+            "taker_buy_volume": last_row["taker_buy_volume"],
+            "taker_sell_volume": last_row["taker_sell_volume"],
             "clv_delta": last_row["clv_delta"],
             "body_delta": last_row["body_delta"],
             "signed_volume_delta": last_row["signed_volume_delta"],
             "hybrid_delta": last_delta,
             "imbalance_ratio": _safe_div(last_delta, last_row["volume"]),
+            "buy_ratio": _safe_div(last_row["buy_volume_proxy"], last_row["volume"]),
         },
         "delta_sma5": delta_sma5,
         "delta_sma20": delta_sma20,
         "delta_zscore20": delta_zscore,
+        "positive_delta_sum20": sum(value for value in deltas[-20:] if value > 0),
+        "negative_delta_sum20": sum(value for value in deltas[-20:] if value < 0),
+        "net_delta_pct20": _safe_div(sum(deltas[-20:]), sum(row["volume"] for row in rows[-20:])),
         "cumulative_delta_20": sum(deltas[-20:]) if deltas else 0.0,
         "cumulative_delta_50": cvd[-1] if cvd else 0.0,
+        "cumulative_delta_normalized": _safe_div(cvd[-1], sum(row["volume"] for row in rows)) if cvd else None,
         "cvd_slope_5": slope_5,
         "cvd_slope_20": slope_20,
         "cvd_acceleration": acceleration,
@@ -563,7 +578,7 @@ def _delta_flow_pack(candles: list[dict[str, Any]], lookback: int = 50) -> dict[
     }
 
 
-def _delta_row(candle: dict[str, Any]) -> dict[str, float]:
+def _delta_row(candle: dict[str, Any]) -> dict[str, Any]:
     open_ = float(candle["open"])
     high = float(candle["high"])
     low = float(candle["low"])
@@ -575,18 +590,36 @@ def _delta_row(candle: dict[str, Any]) -> dict[str, float]:
     signed_volume_delta = volume if close > open_ else -volume if close < open_ else 0.0
     clv_delta = clv * volume
     body_delta = body_ratio * volume
-    hybrid_delta = clv_delta * 0.6 + body_delta * 0.4
-    buy_volume = volume * _clamp((clv + 1) / 2, 0.0, 1.0)
+    taker_buy_volume = _optional_float(candle.get("taker_buy_volume"))
+    if taker_buy_volume is not None and volume:
+        taker_buy_volume = _clamp(taker_buy_volume, 0.0, volume)
+        taker_sell_volume = volume - taker_buy_volume
+        hybrid_delta = taker_buy_volume - taker_sell_volume
+        buy_volume = taker_buy_volume
+        sell_volume = taker_sell_volume
+        source = "taker_buy_volume"
+        method = "Binance taker buy volume: taker_buy_volume - taker_sell_volume"
+    else:
+        taker_sell_volume = None
+        hybrid_delta = clv_delta * 0.6 + body_delta * 0.4
+        buy_volume = volume * _clamp((clv + 1) / 2, 0.0, 1.0)
+        sell_volume = volume - buy_volume
+        source = "ohlcv_proxy"
+        method = "OHLCV proxy: 60% close-location delta + 40% candle-body delta"
     return {
         "volume": volume,
+        "source": source,
+        "method": method,
         "clv": clv,
         "body_ratio": body_ratio,
         "clv_delta": clv_delta,
         "body_delta": body_delta,
         "signed_volume_delta": signed_volume_delta,
         "hybrid_delta": hybrid_delta,
+        "taker_buy_volume": taker_buy_volume,
+        "taker_sell_volume": taker_sell_volume,
         "buy_volume_proxy": buy_volume,
-        "sell_volume_proxy": volume - buy_volume,
+        "sell_volume_proxy": sell_volume,
     }
 
 
@@ -836,11 +869,9 @@ def _volume_delta_profile(candles: list[dict[str, Any]], bins: int = 12, lookbac
         for index in range(bins)
     ]
     for candle in window:
-        typical = (float(candle["high"]) + float(candle["low"]) + float(candle["close"])) / 3
-        index = min(bins - 1, max(0, int((typical - low) / step)))
         row = _delta_row(candle)
-        buckets[index]["volume"] += row["volume"]
-        buckets[index]["delta"] += row["hybrid_delta"]
+        _distribute_value_to_buckets(buckets, float(candle["low"]), float(candle["high"]), row["volume"], "volume")
+        _distribute_value_to_buckets(buckets, float(candle["low"]), float(candle["high"]), row["hybrid_delta"], "delta")
     abs_sorted = sorted(buckets, key=lambda bucket: abs(bucket["delta"]), reverse=True)
     positive = [bucket for bucket in buckets if bucket["delta"] > 0]
     negative = [bucket for bucket in buckets if bucket["delta"] < 0]
@@ -1012,6 +1043,37 @@ def _safe_div(numerator: float, denominator: float) -> float | None:
     return numerator / denominator
 
 
+def _optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_taker_sell_volume(candle: dict[str, Any]) -> float | None:
+    volume = _optional_float(candle.get("volume"))
+    taker_buy = _optional_float(candle.get("taker_buy_volume"))
+    if volume is None or taker_buy is None:
+        return None
+    return max(0.0, volume - taker_buy)
+
+
+def _delta_source_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    if not rows:
+        return {"primary": "none", "taker_delta_ratio": 0.0, "proxy_ratio": 0.0}
+    taker_count = sum(1 for row in rows if row.get("source") == "taker_buy_volume")
+    proxy_count = len(rows) - taker_count
+    return {
+        "primary": "taker_buy_volume" if taker_count >= proxy_count and taker_count else "ohlcv_proxy",
+        "taker_delta_bars": taker_count,
+        "proxy_delta_bars": proxy_count,
+        "taker_delta_ratio": taker_count / len(rows),
+        "proxy_ratio": proxy_count / len(rows),
+    }
+
+
 def _clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
 
@@ -1087,27 +1149,104 @@ def _volume_profile(candles: list[dict[str, Any]], bins: int = 12, lookback: int
     step = (high - low) / bins
     buckets = [{"low": low + step * index, "high": low + step * (index + 1), "volume": 0.0} for index in range(bins)]
     for candle in window:
-        typical = (float(candle["high"]) + float(candle["low"]) + float(candle["close"])) / 3
-        index = min(bins - 1, max(0, int((typical - low) / step)))
-        buckets[index]["volume"] += float(candle.get("volume") or 0.0)
+        _distribute_value_to_buckets(
+            buckets,
+            float(candle["low"]),
+            float(candle["high"]),
+            float(candle.get("volume") or 0.0),
+            "volume",
+        )
     sorted_by_volume = sorted(buckets, key=lambda bucket: bucket["volume"], reverse=True)
     poc_bucket = sorted_by_volume[0]
     lvn_buckets = sorted(buckets, key=lambda bucket: bucket["volume"])[:3]
+    value_area = _value_area_from_buckets(buckets, poc_bucket, target_ratio=0.7)
     return {
         "lookback_bars": len(window),
+        "method": "range-distributed candle volume across price bins",
         "poc": _bucket_mid(poc_bucket),
         "hvn": [_bucket_mid(bucket) for bucket in sorted_by_volume[:3]],
         "lvn": [_bucket_mid(bucket) for bucket in lvn_buckets],
-        "value_area_proxy": {
-            "low": min(bucket["low"] for bucket in sorted_by_volume[: max(1, bins // 2)]),
-            "high": max(bucket["high"] for bucket in sorted_by_volume[: max(1, bins // 2)]),
-        },
+        "value_area_proxy": value_area,
         "bins": buckets,
     }
 
 
 def _bucket_mid(bucket: dict[str, float]) -> float:
     return (bucket["low"] + bucket["high"]) / 2
+
+
+def _distribute_value_to_buckets(
+    buckets: list[dict[str, float]],
+    candle_low: float,
+    candle_high: float,
+    value: float,
+    field: str,
+) -> None:
+    if not buckets or value == 0:
+        return
+    low = min(candle_low, candle_high)
+    high = max(candle_low, candle_high)
+    if math.isclose(low, high):
+        index = _bucket_index_for_price(buckets, low)
+        buckets[index][field] += value
+        return
+    total_overlap = 0.0
+    overlaps: list[tuple[dict[str, float], float]] = []
+    for bucket in buckets:
+        overlap = max(0.0, min(high, bucket["high"]) - max(low, bucket["low"]))
+        if overlap > 0:
+            overlaps.append((bucket, overlap))
+            total_overlap += overlap
+    if not overlaps or total_overlap == 0:
+        index = _bucket_index_for_price(buckets, (low + high) / 2)
+        buckets[index][field] += value
+        return
+    for bucket, overlap in overlaps:
+        bucket[field] += value * (overlap / total_overlap)
+
+
+def _bucket_index_for_price(buckets: list[dict[str, float]], price: float) -> int:
+    if price <= buckets[0]["low"]:
+        return 0
+    if price >= buckets[-1]["high"]:
+        return len(buckets) - 1
+    for index, bucket in enumerate(buckets):
+        if bucket["low"] <= price <= bucket["high"]:
+            return index
+    return len(buckets) - 1
+
+
+def _value_area_from_buckets(
+    buckets: list[dict[str, float]],
+    poc_bucket: dict[str, float],
+    target_ratio: float = 0.7,
+) -> dict[str, float | int | None]:
+    total_volume = sum(bucket["volume"] for bucket in buckets)
+    if not buckets or total_volume <= 0:
+        return {"low": None, "high": None, "volume_ratio": None, "bucket_count": 0}
+    poc_index = buckets.index(poc_bucket)
+    included = {poc_index}
+    current_volume = buckets[poc_index]["volume"]
+    left = poc_index - 1
+    right = poc_index + 1
+    while current_volume / total_volume < target_ratio and (left >= 0 or right < len(buckets)):
+        left_volume = buckets[left]["volume"] if left >= 0 else -1.0
+        right_volume = buckets[right]["volume"] if right < len(buckets) else -1.0
+        if right_volume > left_volume:
+            included.add(right)
+            current_volume += max(0.0, right_volume)
+            right += 1
+        else:
+            included.add(left)
+            current_volume += max(0.0, left_volume)
+            left -= 1
+    selected = [buckets[index] for index in sorted(included)]
+    return {
+        "low": min(bucket["low"] for bucket in selected),
+        "high": max(bucket["high"] for bucket in selected),
+        "volume_ratio": current_volume / total_volume,
+        "bucket_count": len(selected),
+    }
 
 
 def _opening_range(candles: list[dict[str, Any]]) -> dict[str, Any] | None:

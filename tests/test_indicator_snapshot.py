@@ -5,7 +5,7 @@ import pytest
 
 from app.config.settings import Settings
 from app.review import llm_protocol_report
-from app.review.indicator_snapshot import _indicator_pack, compact_snapshot_for_llm, resolve_watchlist
+from app.review.indicator_snapshot import _indicator_pack, _volume_profile, compact_snapshot_for_llm, resolve_watchlist
 
 
 def _candles(count: int = 50):
@@ -54,6 +54,33 @@ def test_indicator_pack_contains_protocol_metrics():
     assert "volume_delta_profile" in pack
     assert "confluence" in pack
     assert "ai_attention_flags" in pack["confluence"]
+
+
+def test_delta_flow_prefers_taker_buy_volume_when_available():
+    candles = _candles()
+    candles[-1]["volume"] = 1000
+    candles[-1]["taker_buy_volume"] = 700
+
+    pack = _indicator_pack(candles, "15m")
+    delta_flow = pack["flow"]["delta_flow"]
+
+    assert delta_flow["quality"] == "TAKER_DELTA"
+    assert delta_flow["last"]["source"] == "taker_buy_volume"
+    assert delta_flow["last"]["hybrid_delta"] == 400
+    assert delta_flow["last"]["buy_ratio"] == 0.7
+
+
+def test_volume_profile_distributes_wide_candle_across_price_bins():
+    candles = [
+        {"time": "t1", "open": 10, "high": 20, "low": 10, "close": 15, "volume": 100},
+    ]
+
+    profile = _volume_profile(candles, bins=2, lookback=1)
+
+    assert profile["method"] == "range-distributed candle volume across price bins"
+    assert profile["bins"][0]["volume"] == 50
+    assert profile["bins"][1]["volume"] == 50
+    assert profile["value_area_proxy"]["volume_ratio"] >= 0.7
 
 
 def test_compact_snapshot_for_llm_removes_volume_profile_bins():

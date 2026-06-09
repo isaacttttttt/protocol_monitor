@@ -447,6 +447,10 @@ def _binance_klines(symbol: str, interval: str, limit: int) -> list[dict[str, fl
             "low": float(row[3]),
             "close": float(row[4]),
             "volume": float(row[5]),
+            "quote_volume": float(row[7]),
+            "trade_count": int(row[8]),
+            "taker_buy_volume": float(row[9]),
+            "taker_buy_quote_volume": float(row[10]),
         }
         for row in rows
     ]
@@ -649,16 +653,23 @@ def _aggregate_candles(candles: list[dict[str, Any]], size: int) -> list[dict[st
         chunk = candles[index : index + size]
         if len(chunk) < size:
             continue
-        aggregated.append(
-            {
-                "time": chunk[-1]["time"],
-                "open": chunk[0]["open"],
-                "high": max(candle["high"] for candle in chunk),
-                "low": min(candle["low"] for candle in chunk),
-                "close": chunk[-1]["close"],
-                "volume": sum(candle["volume"] for candle in chunk),
-            }
-        )
+        item = {
+            "time": chunk[-1]["time"],
+            "open": chunk[0]["open"],
+            "high": max(candle["high"] for candle in chunk),
+            "low": min(candle["low"] for candle in chunk),
+            "close": chunk[-1]["close"],
+            "volume": sum(candle["volume"] for candle in chunk),
+        }
+        if any("quote_volume" in candle for candle in chunk):
+            item["quote_volume"] = sum(candle.get("quote_volume", 0.0) for candle in chunk)
+        if any("trade_count" in candle for candle in chunk):
+            item["trade_count"] = sum(int(candle.get("trade_count", 0)) for candle in chunk)
+        if any("taker_buy_volume" in candle for candle in chunk):
+            item["taker_buy_volume"] = sum(candle.get("taker_buy_volume", 0.0) for candle in chunk)
+        if any("taker_buy_quote_volume" in candle for candle in chunk):
+            item["taker_buy_quote_volume"] = sum(candle.get("taker_buy_quote_volume", 0.0) for candle in chunk)
+        aggregated.append(item)
     if not aggregated:
         raise ValueError("not enough candles to aggregate")
     return aggregated
