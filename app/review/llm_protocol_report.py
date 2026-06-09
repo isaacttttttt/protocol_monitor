@@ -70,7 +70,8 @@ def _messages(
 硬性输出格式：
 1. 标题使用「SPM {hours}H 监控报告」。
 2. 先给「总览」：市场状态、风险开关、今天最需要等的触发。
-3. 每个标的都必须包含：
+3. 每个标的必须使用独立二级标题「## 标的：SYMBOL（市场）」；不得把多个标的合并成批量简报。
+4. 每个标的都必须包含：
    - 数据时间 / 数据源 / 数据质量
    - 当前状态
    - 是否命中：命中或未命中哪些协议模式；缺数据必须写未命中或降级
@@ -80,9 +81,9 @@ def _messages(
    - Macro：方向、关键收复/跌破位、是否进入观察池
    - 关键指标证据：结构、ATR、MACD、VWAP/AVWAP、VP POC/HVN/LVN/VA、Volume Delta Profile、Taker Delta 或 OHLCV Delta Flow、CVD slope/acceleration/背离/吸收、OBV/A-D/NVI、FVG/Order Block/Displacement/流动性池、Confluence flags、量能、Funding/OI 或相对强弱
    - 最终交易指令：当前指令、多头预警、空头预警、Macro 预警、一句话结论
-4. 对 BTC 只能作为 ETH 风险过滤器，除非协议文本要求独立分析。
-5. 对美股必须考虑 External / Index / Sector / Asset Execution 四层。
-6. 语言要像给交易员的执行简报，不要写教学说明。
+5. 对 BTC 只能作为 ETH 风险过滤器，除非协议文本要求独立分析。
+6. 对美股必须考虑 External / Index / Sector / Asset Execution 四层。
+7. 语言要像给交易员的执行简报，不要写教学说明。
 
 【Crypto 协议 v16】
 {crypto_protocol}

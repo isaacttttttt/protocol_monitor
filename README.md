@@ -88,6 +88,8 @@ WATCHLIST_EQUITY_SYMBOLS=CRCL,WDC,ARM,NVDA,TSLA
 2. Copy the webhook URL into `FEISHU_WEBHOOK_URL`.
 3. Set `notification.channels.feishu.enabled: true` in `configs/system.yaml`.
 
+Feishu reports are sent as rich text (`msg_type=post`). The report is split into a summary message plus one message per symbol section, with the keyword included in every title.
+
 ## Local Start
 
 ```powershell

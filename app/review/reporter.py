@@ -6,7 +6,7 @@ from loguru import logger
 
 from app.config.settings import Settings
 from app.notifications.base import NotificationMessage
-from app.notifications.feishu import FeishuNotifier
+from app.notifications.feishu import FeishuNotifier, split_report_for_feishu
 from app.notifications.telegram import TelegramNotifier
 from app.review.llm_protocol_report import build_llm_protocol_report
 from app.review.protocol_analysis import ProtocolAnalysis, format_protocol_section
@@ -117,27 +117,38 @@ class PeriodicReporter:
         for channel, config in notif_cfg.get("channels", {}).items():
             if not config.get("enabled", False):
                 continue
-            message = NotificationMessage(
+            messages = self._notification_messages(channel, signal_id, title, body)
+            for index, message in enumerate(messages, start=1):
+                result = await self.notifiers[channel].send(message)
+                await self.signal_repository.save_notification(
+                    {
+                        "signal_id": message.signal_id,
+                        "channel": channel,
+                        "target": channel,
+                        "title": message.title,
+                        "body": message.body,
+                        "status": "SENT" if result.ok else "FAILED",
+                        "error_message": result.error,
+                        "sent_at": datetime.utcnow() if result.ok else None,
+                    }
+                )
+                if not result.ok:
+                    logger.warning("{} report notification failed part {}/{}: {}", channel, index, len(messages), result.error)
+
+    def _notification_messages(self, channel: str, signal_id: str, title: str, body: str) -> list[NotificationMessage]:
+        if channel == "feishu":
+            parts = split_report_for_feishu(title, body, self.settings.feishu_keyword)
+        else:
+            parts = [(title, body)]
+        return [
+            NotificationMessage(
                 channel=channel,
-                title=title,
-                body=body,
+                title=part_title,
+                body=part_body,
                 level="REPORT",
-                signal_id=signal_id,
+                signal_id=f"{signal_id}-{index:02d}" if len(parts) > 1 else signal_id,
                 symbol="SPM",
                 created_at=datetime.utcnow(),
             )
-            result = await self.notifiers[channel].send(message)
-            await self.signal_repository.save_notification(
-                {
-                    "signal_id": signal_id,
-                    "channel": channel,
-                    "target": channel,
-                    "title": title,
-                    "body": body,
-                    "status": "SENT" if result.ok else "FAILED",
-                    "error_message": result.error,
-                    "sent_at": datetime.utcnow() if result.ok else None,
-                }
-            )
-            if not result.ok:
-                logger.warning("{} report notification failed: {}", channel, result.error)
+            for index, (part_title, part_body) in enumerate(parts, start=1)
+        ]
