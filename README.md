@@ -2,7 +2,7 @@
 
 SmartMoney Protocol Monitor (SPM) is a monitor-only Python service that turns the Smart Money Protocol into an indicator archive plus DeepSeek-driven protocol report.
 
-SPM fetches external market data, calculates protocol indicators, archives the indicator snapshot, sends the snapshot plus protocol text to DeepSeek, receives the model's protocol report, and pushes the result through Feishu or Telegram.
+SPM fetches external market data, calculates protocol indicators, archives the indicator snapshot, sends each target's compact snapshot plus protocol text to DeepSeek, receives the model's single-symbol protocol report, and pushes each result through Feishu or Telegram as it is produced.
 
 It does not place orders, manage exchange accounts, or require trading permissions.
 
@@ -13,7 +13,7 @@ It does not place orders, manage exchange accounts, or require trading permissio
 - Intervals: `1m`, `5m`, `15m`, `1h`, `4h`.
 - Kline cache and persistent storage.
 - ATR, MACD, CVD proxy, VWAP, simplified market structure.
-- Protocol report chain: external market data -> indicator snapshot -> archive -> DeepSeek -> Feishu report.
+- Protocol report chain: external market data -> indicator snapshot -> archive -> per-symbol DeepSeek analysis -> streaming Feishu report.
 - Crypto protocol v16 and Equity protocol v17 are versioned under `protocols/`.
 - DeepSeek API adapter using an OpenAI-compatible chat completions endpoint.
 - Indicator archive table plus local JSONL archive.
@@ -88,7 +88,7 @@ WATCHLIST_EQUITY_SYMBOLS=CRCL,WDC,ARM,NVDA,TSLA
 2. Copy the webhook URL into `FEISHU_WEBHOOK_URL`.
 3. Set `notification.channels.feishu.enabled: true` in `configs/system.yaml`.
 
-Feishu reports are sent as rich text (`msg_type=post`). The report is split into a summary message plus one message per symbol section, with the keyword included in every title.
+Feishu reports are sent as rich text (`msg_type=post`). DeepSeek report mode now pushes one message per analyzed symbol as soon as that symbol's LLM report is ready, with the keyword included in every title.
 
 ## Local Start
 
@@ -187,7 +187,7 @@ On Windows, the wrapper script is:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run_periodic_report.ps1 -Hours 1
 ```
 
-The first command prints a local summary. The second command pushes the same report through enabled Telegram/Feishu channels. The default interval lives in `configs/system.yaml`:
+The first command prints a local summary. The second command streams one DeepSeek report per symbol through enabled Telegram/Feishu channels. The default interval lives in `configs/system.yaml`:
 
 ```yaml
 automation:
@@ -202,7 +202,7 @@ report:
 
 On Railway, prefer changing `WATCHLIST_CRYPTO_SYMBOLS` and `WATCHLIST_EQUITY_SYMBOLS` in Variables instead of editing this YAML.
 
-If `DEEPSEEK_API_KEY` is empty, the report command still fetches market data, calculates indicators, archives the snapshot, and prints a configuration warning. Once the key is present, the same command calls DeepSeek and sends the full protocol report.
+If `DEEPSEEK_API_KEY` is empty, the report command still fetches market data, calculates indicators, archives the snapshot, and prints a configuration warning. Once the key is present, the same command calls DeepSeek separately for each symbol and sends each protocol report as soon as it is generated.
 
 ## Codex Automation
 

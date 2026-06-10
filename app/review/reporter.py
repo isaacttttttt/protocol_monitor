@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -8,7 +8,7 @@ from app.config.settings import Settings
 from app.notifications.base import NotificationMessage
 from app.notifications.feishu import FeishuNotifier, split_report_for_feishu
 from app.notifications.telegram import TelegramNotifier
-from app.review.llm_protocol_report import build_llm_protocol_report
+from app.review.llm_protocol_report import LlmProtocolReportPart, build_llm_protocol_report, stream_llm_protocol_report_parts
 from app.review.protocol_analysis import ProtocolAnalysis, format_protocol_section
 from app.storage.repositories import IndicatorArchiveRepository, KlineRepository, SignalRepository
 
@@ -82,9 +82,7 @@ class PeriodicReporter:
         }
 
     async def build(self, hours: int) -> tuple[str, str]:
-        recent_signals = await self.signal_repository.get_recent_signals(hours)
-        strategy_states = await self.signal_repository.get_strategy_states()
-        kline_count = await self.kline_repository.count_klines()
+        recent_signals, strategy_count, kline_count = await self._report_context(hours)
         report_config = self.system_config.get("report", {})
         if report_config.get("include_protocol_analysis", True) and report_config.get("use_deepseek_analysis", True):
             return await build_llm_protocol_report(
@@ -92,7 +90,7 @@ class PeriodicReporter:
                 self.system_config,
                 hours,
                 kline_count,
-                len(strategy_states),
+                strategy_count,
                 recent_signals,
                 self.indicator_archive_repository,
             )
@@ -104,16 +102,21 @@ class PeriodicReporter:
                 crypto_symbols=report_config.get("crypto_symbols"),
                 equity_symbols=report_config.get("equity_symbols"),
             )
-        return format_periodic_report(hours, kline_count, len(strategy_states), recent_signals, analyses)
+        return format_periodic_report(hours, kline_count, strategy_count, recent_signals, analyses)
 
     async def send(self, hours: int) -> None:
+        report_config = self.system_config.get("report", {})
+        if report_config.get("include_protocol_analysis", True) and report_config.get("use_deepseek_analysis", True):
+            await self._send_llm_stream(hours)
+            return
+
         title, body = await self.build(hours)
         print(f"{title}\n\n{body}")
         notif_cfg = self.system_config.get("notification", {})
         if not notif_cfg.get("enabled", True):
             logger.info("notification disabled; report printed only")
             return
-        signal_id = f"SPM-REPORT-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+        signal_id = f"SPM-REPORT-{_utcnow().strftime('%Y%m%d%H%M%S')}"
         for channel, config in notif_cfg.get("channels", {}).items():
             if not config.get("enabled", False):
                 continue
@@ -129,11 +132,80 @@ class PeriodicReporter:
                         "body": message.body,
                         "status": "SENT" if result.ok else "FAILED",
                         "error_message": result.error,
-                        "sent_at": datetime.utcnow() if result.ok else None,
+                        "sent_at": _utcnow() if result.ok else None,
                     }
                 )
                 if not result.ok:
                     logger.warning("{} report notification failed part {}/{}: {}", channel, index, len(messages), result.error)
+
+    async def _report_context(self, hours: int) -> tuple[list[dict[str, Any]], int, int]:
+        recent_signals = await self.signal_repository.get_recent_signals(hours)
+        strategy_states = await self.signal_repository.get_strategy_states()
+        kline_count = await self.kline_repository.count_klines()
+        return recent_signals, len(strategy_states), kline_count
+
+    async def _send_llm_stream(self, hours: int) -> None:
+        recent_signals, strategy_count, kline_count = await self._report_context(hours)
+        notif_cfg = self.system_config.get("notification", {})
+        notifications_enabled = notif_cfg.get("enabled", True)
+        if not notifications_enabled:
+            logger.info("notification disabled; streaming report printed only")
+
+        signal_id = f"SPM-REPORT-{_utcnow().strftime('%Y%m%d%H%M%S')}"
+        part_count = 0
+        async for part in stream_llm_protocol_report_parts(
+            self.settings,
+            self.system_config,
+            hours,
+            kline_count,
+            strategy_count,
+            recent_signals,
+            self.indicator_archive_repository,
+        ):
+            part_count += 1
+            print(f"{part.title}\n\n{part.body}\n")
+            if notifications_enabled:
+                await self._send_report_part(part, notif_cfg, signal_id, part_count)
+
+        if part_count == 0:
+            logger.warning("DeepSeek streaming report produced no parts")
+
+    async def _send_report_part(
+        self,
+        part: LlmProtocolReportPart,
+        notif_cfg: dict[str, Any],
+        signal_id: str,
+        index: int,
+    ) -> None:
+        level = "OPPORTUNITY" if part.has_trade_opportunity else "REPORT"
+        part_signal_id = f"{signal_id}-{index:02d}-{part.symbol}"
+        for channel, config in notif_cfg.get("channels", {}).items():
+            if not config.get("enabled", False):
+                continue
+            message = NotificationMessage(
+                channel=channel,
+                title=part.title,
+                body=part.body,
+                level=level,
+                signal_id=part_signal_id,
+                symbol=part.symbol,
+                created_at=_utcnow(),
+            )
+            result = await self.notifiers[channel].send(message)
+            await self.signal_repository.save_notification(
+                {
+                    "signal_id": message.signal_id,
+                    "channel": channel,
+                    "target": channel,
+                    "title": message.title,
+                    "body": message.body,
+                    "status": "SENT" if result.ok else "FAILED",
+                    "error_message": result.error,
+                    "sent_at": _utcnow() if result.ok else None,
+                }
+            )
+            if not result.ok:
+                logger.warning("{} streaming report notification failed for {}: {}", channel, part.symbol, result.error)
 
     def _notification_messages(self, channel: str, signal_id: str, title: str, body: str) -> list[NotificationMessage]:
         if channel == "feishu":
@@ -148,7 +220,11 @@ class PeriodicReporter:
                 level="REPORT",
                 signal_id=f"{signal_id}-{index:02d}" if len(parts) > 1 else signal_id,
                 symbol="SPM",
-                created_at=datetime.utcnow(),
+                created_at=_utcnow(),
             )
             for index, (part_title, part_body) in enumerate(parts, start=1)
         ]
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC).replace(tzinfo=None)

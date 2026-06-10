@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import dataclass
 import json
 import math
 from datetime import datetime, timezone
 from pathlib import Path
 from statistics import median, pstdev
-from typing import Any
+from typing import Any, Iterator
 from uuid import uuid4
 
 from app.config.settings import Settings
@@ -25,13 +26,88 @@ DEFAULT_EQUITY_SYMBOLS = ["CRCL", "WDC", "ARM", "INTU", "INFQ"]
 EQUITY_CONTEXT_SYMBOLS = ["SPY", "QQQ", "IWM", "XLK", "SMH"]
 
 
+@dataclass(frozen=True)
+class IndicatorSnapshotEvent:
+    snapshot: dict[str, Any]
+    market: str
+    symbol: str
+    item: dict[str, Any]
+
+
 def build_indicator_snapshot(system_config: dict[str, Any], settings: Settings | None = None) -> dict[str, Any]:
     watchlist = resolve_watchlist(system_config, settings)
     crypto_symbols = watchlist["crypto_symbols"]
     equity_symbols = watchlist["equity_symbols"]
     equity_context_symbols = watchlist["equity_context_symbols"]
+    snapshot = _snapshot_base(watchlist)
 
-    snapshot: dict[str, Any] = {
+    for symbol in crypto_symbols:
+        snapshot["symbols"]["crypto"].append(_safe_build(lambda: _build_crypto_snapshot(str(symbol)), str(symbol), "crypto"))
+
+    equity_context = _build_equity_context(equity_context_symbols)
+    snapshot["contexts"]["equity"] = equity_context["context"]
+    spy_daily = equity_context.get("spy_daily") or []
+    for symbol in equity_symbols:
+        snapshot["symbols"]["equity"].append(
+            _safe_build(lambda symbol=symbol: _build_equity_snapshot(str(symbol), spy_daily), str(symbol), "equity")
+        )
+
+    return _clean(snapshot)
+
+
+def iter_indicator_snapshot_events(system_config: dict[str, Any], settings: Settings | None = None) -> Iterator[IndicatorSnapshotEvent]:
+    watchlist = resolve_watchlist(system_config, settings)
+    crypto_symbols = watchlist["crypto_symbols"]
+    equity_symbols = watchlist["equity_symbols"]
+    equity_context_symbols = watchlist["equity_context_symbols"]
+    snapshot = _snapshot_base(watchlist)
+
+    crypto_context: dict[str, dict[str, Any]] = {}
+    if "BTCUSDT" in crypto_symbols:
+        crypto_context["BTCUSDT"] = _clean(_safe_build(lambda: _build_crypto_snapshot("BTCUSDT"), "BTCUSDT", "crypto"))
+        snapshot["contexts"]["crypto"] = {"BTCUSDT": deepcopy(crypto_context["BTCUSDT"])}
+
+    for symbol in crypto_symbols:
+        item = crypto_context.get(symbol)
+        if item is None:
+            item = _clean(_safe_build(lambda symbol=symbol: _build_crypto_snapshot(str(symbol)), str(symbol), "crypto"))
+        snapshot["symbols"]["crypto"].append(item)
+        yield IndicatorSnapshotEvent(snapshot=snapshot, market="crypto", symbol=str(symbol), item=item)
+
+    equity_context = _build_equity_context(equity_context_symbols)
+    snapshot["contexts"]["equity"] = _clean(equity_context["context"])
+    spy_daily = equity_context.get("spy_daily") or []
+    for symbol in equity_symbols:
+        item = _clean(_safe_build(lambda symbol=symbol: _build_equity_snapshot(str(symbol), spy_daily), str(symbol), "equity"))
+        snapshot["symbols"]["equity"].append(item)
+        yield IndicatorSnapshotEvent(snapshot=snapshot, market="equity", symbol=str(symbol), item=item)
+
+def compact_symbol_snapshot_for_llm(
+    snapshot: dict[str, Any],
+    market: str,
+    item: dict[str, Any],
+    recent_signals: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    compact = deepcopy(snapshot)
+    compact["mode"] = "single_symbol_protocol_analysis"
+    compact["symbols"] = {"crypto": [], "equity": []}
+    compact["symbols"][market] = [deepcopy(item)]
+    compact["llm_payload_note"] = (
+        "This payload contains one target symbol plus required market context. Full multi-symbol snapshots are "
+        "archived locally/database; bulky volume profile bins and raw details are omitted here."
+    )
+    if recent_signals is not None:
+        monitor_window = compact.setdefault("monitor_window", {})
+        symbol = str(item.get("symbol", ""))
+        monitor_window["recent_signals_for_symbol"] = [
+            signal for signal in recent_signals if str(signal.get("symbol", "")).upper() == symbol.upper()
+        ]
+    _drop_heavy_fields(compact)
+    return _clean(compact)
+
+
+def _snapshot_base(watchlist: dict[str, Any]) -> dict[str, Any]:
+    return {
         "schema_version": 3,
         "run_id": datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S") + "-" + uuid4().hex[:8],
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -97,19 +173,6 @@ def build_indicator_snapshot(system_config: dict[str, Any], settings: Settings |
         "contexts": {},
         "symbols": {"crypto": [], "equity": []},
     }
-
-    for symbol in crypto_symbols:
-        snapshot["symbols"]["crypto"].append(_safe_build(lambda: _build_crypto_snapshot(str(symbol)), str(symbol), "crypto"))
-
-    equity_context = _build_equity_context(equity_context_symbols)
-    snapshot["contexts"]["equity"] = equity_context["context"]
-    spy_daily = equity_context.get("spy_daily") or []
-    for symbol in equity_symbols:
-        snapshot["symbols"]["equity"].append(
-            _safe_build(lambda symbol=symbol: _build_equity_snapshot(str(symbol), spy_daily), str(symbol), "equity")
-        )
-
-    return _clean(snapshot)
 
 
 def resolve_watchlist(system_config: dict[str, Any], settings: Settings | None = None) -> dict[str, Any]:

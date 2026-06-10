@@ -1,6 +1,6 @@
 # Indicator Inventory
 
-SPM calculates indicators first, archives the full snapshot, then sends the snapshot plus protocol text to DeepSeek. The code should not turn these indicators into final protocol conclusions; that judgment belongs to the LLM report step.
+SPM calculates indicators first, archives the full snapshot, then sends one compact target-symbol snapshot plus protocol text to DeepSeek at a time. The code should not turn these indicators into final protocol conclusions; that judgment belongs to the LLM report step.
 
 ## Global Snapshot Metadata
 

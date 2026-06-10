@@ -5,7 +5,14 @@ import pytest
 
 from app.config.settings import Settings
 from app.review import llm_protocol_report
-from app.review.indicator_snapshot import _indicator_pack, _volume_profile, compact_snapshot_for_llm, resolve_watchlist
+from app.review.indicator_snapshot import (
+    IndicatorSnapshotEvent,
+    _indicator_pack,
+    _volume_profile,
+    compact_snapshot_for_llm,
+    compact_symbol_snapshot_for_llm,
+    resolve_watchlist,
+)
 
 
 def _candles(count: int = 50):
@@ -96,6 +103,35 @@ def test_compact_snapshot_for_llm_removes_volume_profile_bins():
     assert "llm_payload_note" in compact
 
 
+def test_compact_symbol_snapshot_for_llm_keeps_single_target_and_context():
+    pack = _indicator_pack(_candles(), "15m")
+    eth = {"symbol": "ETHUSDT", "market": "crypto", "status": "ok", "timeframes": {"15m": pack}}
+    btc = {"symbol": "BTCUSDT", "market": "crypto", "status": "ok", "timeframes": {"15m": pack}}
+    snapshot = {
+        "run_id": "run-1",
+        "generated_at": "2026-01-01T00:00:00+00:00",
+        "monitor_window": {},
+        "contexts": {"crypto": {"BTCUSDT": btc}},
+        "symbols": {"crypto": [eth, btc], "equity": [{"symbol": "CRCL"}]},
+    }
+
+    compact = compact_symbol_snapshot_for_llm(
+        snapshot,
+        "crypto",
+        eth,
+        recent_signals=[
+            {"symbol": "ETHUSDT", "level": "L3"},
+            {"symbol": "BTCUSDT", "level": "L2"},
+        ],
+    )
+
+    assert [item["symbol"] for item in compact["symbols"]["crypto"]] == ["ETHUSDT"]
+    assert compact["symbols"]["equity"] == []
+    assert "BTCUSDT" in compact["contexts"]["crypto"]
+    assert compact["monitor_window"]["recent_signals_for_symbol"] == [{"symbol": "ETHUSDT", "level": "L3"}]
+    assert "bins" not in compact["symbols"]["crypto"][0]["timeframes"]["15m"]["volume_profile"]
+
+
 def test_watchlist_env_overrides_yaml_symbols():
     settings = Settings(
         watchlist_crypto_symbols="ethusdt, solusdt btcusdt",
@@ -166,3 +202,76 @@ async def test_missing_deepseek_key_still_archives_snapshot(tmp_path, monkeypatc
     assert saved["payload"]["run_id"] == "test-run"
     archived = json.loads(archive_path.read_text(encoding="utf-8").strip())
     assert archived["run_id"] == "test-run"
+
+
+@pytest.mark.asyncio
+async def test_stream_llm_protocol_report_parts_calls_llm_per_symbol(tmp_path, monkeypatch):
+    protocol_path = tmp_path / "protocol.md"
+    protocol_path.write_text("protocol", encoding="utf-8")
+    archive_path = tmp_path / "snapshots.jsonl"
+    eth = {"symbol": "ETHUSDT", "market": "crypto", "status": "ok", "price": 100.0, "timeframes": {}}
+    btc = {"symbol": "BTCUSDT", "market": "crypto", "status": "ok", "price": 200.0, "timeframes": {}}
+    first_snapshot = {
+        "run_id": "stream-run",
+        "generated_at": "2026-01-01T00:00:00+00:00",
+        "contexts": {},
+        "symbols": {"crypto": [eth], "equity": []},
+    }
+    second_snapshot = {
+        "run_id": "stream-run",
+        "generated_at": "2026-01-01T00:00:00+00:00",
+        "contexts": {},
+        "symbols": {"crypto": [eth, btc], "equity": []},
+    }
+    calls = []
+    saved = {}
+
+    class FakeDeepSeekClient:
+        is_configured = True
+
+        def __init__(self, settings):
+            self.settings = settings
+
+        async def chat(self, messages):
+            calls.append(messages)
+            if len(calls) == 1:
+                return "## 标的：ETHUSDT（Crypto）\n机会等级：TRADE\n交易机会：是"
+            return "## 标的：BTCUSDT（Crypto）\n机会等级：NONE\n交易机会：否"
+
+    class DummyArchiveRepository:
+        async def save_snapshot(self, payload):
+            saved["payload"] = payload
+
+    def fake_events(_system_config, _settings):
+        yield IndicatorSnapshotEvent(first_snapshot, "crypto", "ETHUSDT", eth)
+        yield IndicatorSnapshotEvent(second_snapshot, "crypto", "BTCUSDT", btc)
+
+    monkeypatch.setattr(llm_protocol_report, "DeepSeekClient", FakeDeepSeekClient)
+    monkeypatch.setattr(llm_protocol_report, "iter_indicator_snapshot_events", fake_events)
+    settings = Settings(
+        deepseek_api_key="test-key",
+        crypto_protocol_path=str(protocol_path),
+        equity_protocol_path=str(protocol_path),
+        indicator_archive_path=str(archive_path),
+    )
+
+    parts = [
+        part
+        async for part in llm_protocol_report.stream_llm_protocol_report_parts(
+            settings,
+            {"report": {}},
+            1,
+            10,
+            2,
+            [{"symbol": "ETHUSDT", "level": "L3"}],
+            DummyArchiveRepository(),
+        )
+    ]
+
+    assert len(calls) == 2
+    assert [part.symbol for part in parts] == ["ETHUSDT", "BTCUSDT"]
+    assert parts[0].has_trade_opportunity is True
+    assert "交易机会" in parts[0].title
+    assert parts[1].has_trade_opportunity is False
+    assert saved["payload"]["run_id"] == "stream-run"
+    assert json.loads(archive_path.read_text(encoding="utf-8").strip())["run_id"] == "stream-run"
