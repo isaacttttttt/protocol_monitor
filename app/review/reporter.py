@@ -168,7 +168,7 @@ class PeriodicReporter:
                 await self._send_report_part(part, notif_cfg, signal_id, part_count)
 
         if part_count == 0:
-            logger.warning("DeepSeek streaming report produced no parts")
+            logger.warning("LLM streaming report produced no parts")
 
     async def _send_report_part(
         self,

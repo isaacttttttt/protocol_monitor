@@ -39,7 +39,7 @@ def test_split_report_for_feishu_creates_overview_and_symbol_parts():
 现金也是仓位
 """
 
-    parts = split_report_for_feishu("SPM 1H DeepSeek 协议监控报告", body, "监控报告")
+    parts = split_report_for_feishu("SPM 1H LLM 协议监控报告", body, "监控报告")
 
     assert [title for title, _ in parts] == [
         "监控报告｜总览",

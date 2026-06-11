@@ -198,7 +198,7 @@ async def test_missing_deepseek_key_still_archives_snapshot(tmp_path, monkeypatc
     )
 
     assert title == "SPM 2H DeepSeek 协议监控报告"
-    assert "DeepSeek API Key 未配置" in body
+    assert "DeepSeek API 配置未完成" in body
     assert saved["payload"]["run_id"] == "test-run"
     archived = json.loads(archive_path.read_text(encoding="utf-8").strip())
     assert archived["run_id"] == "test-run"
@@ -226,8 +226,9 @@ async def test_stream_llm_protocol_report_parts_calls_llm_per_symbol(tmp_path, m
     calls = []
     saved = {}
 
-    class FakeDeepSeekClient:
+    class FakeLlmClient:
         is_configured = True
+        display_name = "FineRes"
 
         def __init__(self, settings):
             self.settings = settings
@@ -246,7 +247,7 @@ async def test_stream_llm_protocol_report_parts_calls_llm_per_symbol(tmp_path, m
         yield IndicatorSnapshotEvent(first_snapshot, "crypto", "ETHUSDT", eth)
         yield IndicatorSnapshotEvent(second_snapshot, "crypto", "BTCUSDT", btc)
 
-    monkeypatch.setattr(llm_protocol_report, "DeepSeekClient", FakeDeepSeekClient)
+    monkeypatch.setattr(llm_protocol_report, "OpenAICompatibleClient", FakeLlmClient)
     monkeypatch.setattr(llm_protocol_report, "iter_indicator_snapshot_events", fake_events)
     settings = Settings(
         deepseek_api_key="test-key",

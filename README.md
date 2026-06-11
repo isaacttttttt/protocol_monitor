@@ -1,8 +1,8 @@
 # SmartMoney Protocol Monitor
 
-SmartMoney Protocol Monitor (SPM) is a monitor-only Python service that turns the Smart Money Protocol into an indicator archive plus DeepSeek-driven protocol report.
+SmartMoney Protocol Monitor (SPM) is a monitor-only Python service that turns the Smart Money Protocol into an indicator archive plus an OpenAI-compatible LLM protocol report.
 
-SPM fetches external market data, calculates protocol indicators, archives the indicator snapshot, sends each target's compact snapshot plus protocol text to DeepSeek, receives the model's single-symbol protocol report, and pushes each result through Feishu or Telegram as it is produced.
+SPM fetches external market data, calculates protocol indicators, archives the indicator snapshot, sends each target's compact snapshot plus protocol text to the configured LLM, receives the model's single-symbol protocol report, and pushes each result through Feishu or Telegram as it is produced.
 
 It does not place orders, manage exchange accounts, or require trading permissions.
 
@@ -13,9 +13,9 @@ It does not place orders, manage exchange accounts, or require trading permissio
 - Intervals: `1m`, `5m`, `15m`, `1h`, `4h`.
 - Kline cache and persistent storage.
 - ATR, MACD, CVD proxy, VWAP, simplified market structure.
-- Protocol report chain: external market data -> indicator snapshot -> archive -> per-symbol DeepSeek analysis -> streaming Feishu report.
+- Protocol report chain: external market data -> indicator snapshot -> archive -> per-symbol LLM analysis -> streaming Feishu report.
 - Crypto protocol v16 and Equity protocol v17 are versioned under `protocols/`.
-- DeepSeek API adapter using an OpenAI-compatible chat completions endpoint.
+- OpenAI-compatible chat completions adapter, with legacy DeepSeek settings still supported.
 - Indicator archive table plus local JSONL archive.
 - Indicator inventory in `docs/INDICATORS.md`.
 - BTC strong bullish / strong bearish filter.
@@ -54,6 +54,19 @@ YAHOO_CHART_BASE=https://query1.finance.yahoo.com/v8/finance/chart
 WATCHLIST_CRYPTO_SYMBOLS=ETHUSDT,BTCUSDT
 WATCHLIST_EQUITY_SYMBOLS=CRCL,WDC,ARM,INTU,INFQ
 EQUITY_CONTEXT_SYMBOLS=SPY,QQQ,IWM,XLK,SMH
+LLM_PROVIDER_NAME=FineRes
+LLM_API_KEY=
+LLM_BASE_URL=https://it-ai.fineres.com/v1
+LLM_CHAT_COMPLETIONS_URL=
+LLM_CHAT_COMPLETIONS_PATH=/chat/completions
+LLM_MODEL=gpt-5.5
+LLM_THINKING=
+LLM_REASONING_EFFORT=
+LLM_TEMPERATURE=0.2
+LLM_MAX_TOKENS=6000
+LLM_TIMEOUT_SECONDS=300
+
+# Legacy fallback, used only when LLM_* is not configured.
 DEEPSEEK_API_KEY=
 DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_MODEL=deepseek-v4-pro
@@ -88,7 +101,7 @@ WATCHLIST_EQUITY_SYMBOLS=CRCL,WDC,ARM,NVDA,TSLA
 2. Copy the webhook URL into `FEISHU_WEBHOOK_URL`.
 3. Set `notification.channels.feishu.enabled: true` in `configs/system.yaml`.
 
-Feishu reports are sent as rich text (`msg_type=post`). DeepSeek report mode now pushes one message per analyzed symbol as soon as that symbol's LLM report is ready, with the keyword included in every title.
+Feishu reports are sent as rich text (`msg_type=post`). LLM report mode pushes one message per analyzed symbol as soon as that symbol's report is ready, with the keyword included in every title.
 
 ## Local Start
 
@@ -187,7 +200,7 @@ On Windows, the wrapper script is:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run_periodic_report.ps1 -Hours 1
 ```
 
-The first command prints a local summary. The second command streams one DeepSeek report per symbol through enabled Telegram/Feishu channels. The default interval lives in `configs/system.yaml`:
+The first command prints a local summary. The second command streams one LLM report per symbol through enabled Telegram/Feishu channels. The default interval lives in `configs/system.yaml`:
 
 ```yaml
 automation:
@@ -202,7 +215,7 @@ report:
 
 On Railway, prefer changing `WATCHLIST_CRYPTO_SYMBOLS` and `WATCHLIST_EQUITY_SYMBOLS` in Variables instead of editing this YAML.
 
-If `DEEPSEEK_API_KEY` is empty, the report command still fetches market data, calculates indicators, archives the snapshot, and prints a configuration warning. Once the key is present, the same command calls DeepSeek separately for each symbol and sends each protocol report as soon as it is generated.
+If `LLM_API_KEY` and the legacy `DEEPSEEK_API_KEY` are empty, the report command still fetches market data, calculates indicators, archives the snapshot, and prints a configuration warning. Once the key is present, the same command calls the configured LLM separately for each symbol and sends each protocol report as soon as it is generated.
 
 ## Codex Automation
 

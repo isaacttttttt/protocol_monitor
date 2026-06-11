@@ -1,6 +1,6 @@
 # Railway Cron Deployment
 
-This project can run on Railway as a short-lived Cron Job. Railway starts the container at the configured report times, executes the report command, calculates and archives indicators, calls DeepSeek, sends the Feishu notification, and exits.
+This project can run on Railway as a short-lived Cron Job. Railway starts the container at the configured report times, executes the report command, calculates and archives indicators, calls the configured LLM, sends the Feishu notification, and exits.
 
 ## Railway Settings
 
@@ -35,7 +35,18 @@ YAHOO_CHART_BASE=https://query1.finance.yahoo.com/v8/finance/chart
 WATCHLIST_CRYPTO_SYMBOLS=ETHUSDT,BTCUSDT
 WATCHLIST_EQUITY_SYMBOLS=CRCL,WDC,ARM,INTU,INFQ
 EQUITY_CONTEXT_SYMBOLS=SPY,QQQ,IWM,XLK,SMH
-DEEPSEEK_API_KEY=<your-deepseek-api-key>
+LLM_PROVIDER_NAME=FineRes
+LLM_API_KEY=<your-llm-api-key>
+LLM_BASE_URL=https://it-ai.fineres.com/v1
+LLM_CHAT_COMPLETIONS_URL=
+LLM_CHAT_COMPLETIONS_PATH=/chat/completions
+LLM_MODEL=gpt-5.5
+LLM_THINKING=
+LLM_REASONING_EFFORT=
+LLM_TEMPERATURE=0.2
+LLM_MAX_TOKENS=6000
+LLM_TIMEOUT_SECONDS=300
+DEEPSEEK_API_KEY=
 DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_MODEL=deepseek-v4-pro
 DEEPSEEK_THINKING=enabled
@@ -49,6 +60,8 @@ EQUITY_PROTOCOL_PATH=protocols/equity_smartmoney_protocol_v17.md
 ```
 
 `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` can stay empty unless you also want Telegram.
+
+`DEEPSEEK_*` is a legacy fallback and is used only when `LLM_*` is not configured.
 
 To add or remove monitored symbols, edit `WATCHLIST_CRYPTO_SYMBOLS` and `WATCHLIST_EQUITY_SYMBOLS` in Railway Variables and redeploy/restart the Cron service. No code push is needed.
 
@@ -75,7 +88,7 @@ Without Postgres or a volume, the Feishu report still works, but historical indi
    - Start Command: `python -m app.main report --hours 1 --send`
    - Cron Schedule: `0 2,6,9,12,14,18 * * *`
 5. Add the variables above in the service Variables tab.
-6. Deploy and open Logs to confirm the report prints and Feishu receives `SPM 1H DeepSeek 协议监控报告`.
+6. Deploy and open Logs to confirm the report prints and Feishu receives `SPM 1H FineRes 协议监控报告` or the provider name configured in `LLM_PROVIDER_NAME`.
 
 ## Manual Test
 

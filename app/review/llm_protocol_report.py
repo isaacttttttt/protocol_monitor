@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from app.config.settings import Settings
-from app.llm.deepseek import DeepSeekClient
+from app.llm.openai_compatible import OpenAICompatibleClient
 from app.review.indicator_snapshot import (
     archive_indicator_snapshot,
     build_indicator_snapshot,
@@ -54,7 +54,8 @@ async def build_llm_protocol_report(
     if len(parts) == 1 and parts[0].symbol == "SPM":
         return parts[0].title, parts[0].body
 
-    title = f"SPM {hours}H DeepSeek 协议监控报告"
+    client = OpenAICompatibleClient(settings)
+    title = f"SPM {hours}H {client.display_name} 协议监控报告"
     return title, _combine_report_parts(hours, kline_count, strategy_count, recent_signals, parts)
 
 
@@ -67,13 +68,13 @@ async def stream_llm_protocol_report_parts(
     recent_signals: list[dict[str, Any]],
     archive_repository: Any | None = None,
 ) -> AsyncIterator[LlmProtocolReportPart]:
-    title = f"SPM {hours}H DeepSeek 协议监控报告"
-    client = DeepSeekClient(settings)
+    client = OpenAICompatibleClient(settings)
+    title = f"SPM {hours}H {client.display_name} 协议监控报告"
     if not client.is_configured:
         snapshot = build_indicator_snapshot(system_config, settings)
         snapshot["monitor_window"] = _monitor_window(hours, kline_count, strategy_count, recent_signals)
         await archive_indicator_snapshot(snapshot, settings, archive_repository)
-        yield LlmProtocolReportPart(title=title, body=_missing_key_body(settings, snapshot), symbol="SPM", market="overview")
+        yield LlmProtocolReportPart(title=title, body=_missing_key_body(settings, snapshot, client), symbol="SPM", market="overview")
         return
 
     try:
@@ -158,10 +159,10 @@ async def build_legacy_llm_protocol_report(
     }
     await archive_indicator_snapshot(snapshot, settings, archive_repository)
 
-    title = f"SPM {hours}H DeepSeek 协议监控报告"
-    client = DeepSeekClient(settings)
+    client = OpenAICompatibleClient(settings)
+    title = f"SPM {hours}H {client.display_name} 协议监控报告"
     if not client.is_configured:
-        return title, _missing_key_body(settings, snapshot)
+        return title, _missing_key_body(settings, snapshot, client)
 
     try:
         crypto_protocol = _read_protocol(settings.crypto_protocol_path)
@@ -361,7 +362,7 @@ def _symbol_llm_error_body(exc: Exception, symbol: str, market: str, snapshot: d
         "机会等级：DATA_ERROR",
         "交易机会：否",
         "机会类型：None",
-        "DeepSeek 单标的调用失败，已完成该标的指标计算，本轮不做交易机会判断。",
+        "大模型单标的调用失败，已完成该标的指标计算，本轮不做交易机会判断。",
         f"错误：{exc}",
         "",
         "本轮指标快照摘要：",
@@ -389,16 +390,20 @@ def _read_protocol(path_value: str) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def _missing_key_body(settings: Settings, snapshot: dict[str, Any]) -> str:
+def _missing_key_body(settings: Settings, snapshot: dict[str, Any], client: OpenAICompatibleClient) -> str:
+    missing = client.missing_config_keys or ["LLM_API_KEY"]
     lines = [
-        "DeepSeek API Key 未配置，已完成外部数据抓取、指标计算与指标归档，但没有调用大模型生成协议判断。",
+        f"{client.display_name} API 配置未完成，已完成外部数据抓取、指标计算与指标归档，但没有调用大模型生成协议判断。",
         "",
-        "需要配置：",
-        "- `DEEPSEEK_API_KEY`",
-        f"- `DEEPSEEK_BASE_URL={settings.deepseek_base_url}`",
-        f"- `DEEPSEEK_MODEL={settings.deepseek_model}`",
-        f"- `DEEPSEEK_THINKING={settings.deepseek_thinking}`",
-        f"- `DEEPSEEK_REASONING_EFFORT={settings.deepseek_reasoning_effort}`",
+        "需要配置以下环境变量：",
+        *[f"- `{key}`" for key in missing],
+        "",
+        "推荐新通用配置：",
+        f"- `LLM_BASE_URL={settings.llm_base_url or 'https://it-ai.fineres.com/v1'}`",
+        f"- `LLM_MODEL={settings.llm_model or 'gpt-5.5'}`",
+        "- `LLM_API_KEY=sk_...`",
+        "",
+        "旧 DeepSeek 配置仍可作为兼容兜底。",
         "",
         "本轮指标快照摘要：",
         *summarize_snapshot_for_report(snapshot),
@@ -408,7 +413,7 @@ def _missing_key_body(settings: Settings, snapshot: dict[str, Any]) -> str:
 
 def _llm_error_body(exc: Exception, snapshot: dict[str, Any]) -> str:
     lines = [
-        "DeepSeek 调用失败，已完成外部数据抓取、指标计算与指标归档。",
+        "大模型调用失败，已完成外部数据抓取、指标计算与指标归档。",
         f"错误：{exc}",
         "",
         "本轮指标快照摘要：",

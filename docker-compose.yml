@@ -23,6 +23,17 @@ services:
       FEISHU_WEBHOOK_URL: ${FEISHU_WEBHOOK_URL:-}
       BINANCE_WS_BASE: ${BINANCE_WS_BASE:-wss://fstream.binance.com/ws}
       BINANCE_REST_BASE: ${BINANCE_REST_BASE:-https://fapi.binance.com}
+      LLM_PROVIDER_NAME: ${LLM_PROVIDER_NAME:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://it-ai.fineres.com/v1}
+      LLM_CHAT_COMPLETIONS_URL: ${LLM_CHAT_COMPLETIONS_URL:-}
+      LLM_CHAT_COMPLETIONS_PATH: ${LLM_CHAT_COMPLETIONS_PATH:-/chat/completions}
+      LLM_MODEL: ${LLM_MODEL:-gpt-5.5}
+      LLM_THINKING: ${LLM_THINKING:-}
+      LLM_REASONING_EFFORT: ${LLM_REASONING_EFFORT:-}
+      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.2}
+      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-6000}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-300}
     volumes:
       - ./configs:/app/configs:ro
     command: ["python", "-m", "app.main"]

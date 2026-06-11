@@ -18,6 +18,17 @@ class Settings(BaseSettings):
     watchlist_crypto_symbols: str = ""
     watchlist_equity_symbols: str = ""
     equity_context_symbols: str = ""
+    llm_provider_name: str = ""
+    llm_api_key: str = ""
+    llm_base_url: str = ""
+    llm_chat_completions_url: str = ""
+    llm_chat_completions_path: str = "/chat/completions"
+    llm_model: str = ""
+    llm_thinking: str = ""
+    llm_reasoning_effort: str = ""
+    llm_temperature: float = 0.2
+    llm_max_tokens: int = 6000
+    llm_timeout_seconds: int = 300
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-v4-pro"

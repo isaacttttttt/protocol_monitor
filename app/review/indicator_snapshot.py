@@ -239,7 +239,7 @@ def summarize_snapshot_for_report(snapshot: dict[str, Any]) -> list[str]:
 def compact_snapshot_for_llm(snapshot: dict[str, Any]) -> dict[str, Any]:
     compact = deepcopy(snapshot)
     compact["llm_payload_note"] = (
-        "This is a compact copy for DeepSeek. Full indicator snapshots are archived locally/database; "
+        "This is a compact copy for the configured LLM. Full indicator snapshots are archived locally/database; "
         "volume profile bins and other bulky raw details are omitted here."
     )
     _drop_heavy_fields(compact)
