@@ -62,7 +62,7 @@ async def test_reporter_send_pushes_stream_parts(monkeypatch):
         Settings(feishu_webhook_url="https://example.test/webhook"),
         {
             "notification": {"enabled": True, "channels": {"feishu": {"enabled": True}}},
-            "report": {"include_protocol_analysis": True, "use_deepseek_analysis": True},
+            "report": {"include_protocol_analysis": True, "use_llm_analysis": True},
         },
         DummyKlineRepository(),
         DummySignalRepository(),

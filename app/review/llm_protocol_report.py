@@ -404,8 +404,6 @@ def _missing_key_body(settings: Settings, snapshot: dict[str, Any], client: Open
         "- `LLM_API_KEY=sk_...`",
         "- Provider URL、模型和请求参数写在 `configs/llms/<LLM_CONFIG>.yaml`。",
         "",
-        "旧 DeepSeek 配置仍可作为兼容兜底。",
-        "",
         "本轮指标快照摘要：",
         *summarize_snapshot_for_report(snapshot),
     ]

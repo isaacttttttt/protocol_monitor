@@ -15,7 +15,7 @@ It does not place orders, manage exchange accounts, or require trading permissio
 - ATR, MACD, CVD proxy, VWAP, simplified market structure.
 - Protocol report chain: external market data -> indicator snapshot -> archive -> per-symbol LLM analysis -> streaming Feishu report.
 - Crypto protocol v16 and Equity protocol v17 are versioned under `protocols/`.
-- Config-file driven OpenAI-compatible chat completions adapter, with legacy DeepSeek settings still supported.
+- Config-file driven OpenAI-compatible chat completions adapter.
 - Indicator archive table plus local JSONL archive.
 - Indicator inventory in `docs/INDICATORS.md`.
 - BTC strong bullish / strong bearish filter.
@@ -57,16 +57,6 @@ EQUITY_CONTEXT_SYMBOLS=SPY,QQQ,IWM,XLK,SMH
 LLM_CONFIG=fineres
 LLM_CONFIG_DIR=configs/llms
 LLM_API_KEY=
-
-# Legacy fallback, used only when LLM_CONFIG and LLM_* are not configured.
-DEEPSEEK_API_KEY=
-DEEPSEEK_BASE_URL=https://api.deepseek.com
-DEEPSEEK_MODEL=deepseek-v4-pro
-DEEPSEEK_THINKING=enabled
-DEEPSEEK_REASONING_EFFORT=max
-DEEPSEEK_TEMPERATURE=0.2
-DEEPSEEK_MAX_TOKENS=6000
-DEEPSEEK_TIMEOUT_SECONDS=300
 INDICATOR_ARCHIVE_PATH=data/indicator_snapshots.jsonl
 CRYPTO_PROTOCOL_PATH=protocols/crypto_smartmoney_protocol_v16.md
 EQUITY_PROTOCOL_PATH=protocols/equity_smartmoney_protocol_v17.md
@@ -201,7 +191,7 @@ automation:
   report_interval_hours: 1
 
 report:
-  use_deepseek_analysis: true
+  use_llm_analysis: true
   crypto_symbols: ["ETHUSDT", "BTCUSDT"]
   equity_symbols: ["CRCL", "WDC", "ARM", "INTU", "INFQ"]
   equity_context_symbols: ["SPY", "QQQ", "IWM", "XLK", "SMH"]
@@ -209,7 +199,7 @@ report:
 
 On Railway, prefer changing `WATCHLIST_CRYPTO_SYMBOLS` and `WATCHLIST_EQUITY_SYMBOLS` in Variables instead of editing this YAML.
 
-If the selected `LLM_CONFIG` has no API key in its configured key environment variable, and the legacy `DEEPSEEK_API_KEY` fallback is also empty, the report command still fetches market data, calculates indicators, archives the snapshot, and prints a configuration warning. Once the key is present, the same command calls the configured LLM separately for each symbol and sends each protocol report as soon as it is generated.
+If `LLM_CONFIG` or the selected config's API key is missing, the report command still fetches market data, calculates indicators, archives the snapshot, and prints a configuration warning. Once the config and key are present, the same command calls the configured LLM separately for each symbol and sends each protocol report as soon as it is generated.
 
 FineRes follows the native OpenAI Chat Completions request body. The repository's `configs/llms/fineres.yaml` does not include the non-standard `thinking` parameter, so FineRes will not receive it. If you add `reasoning_effort`, FineRes accepts only `low`, `medium`, or `high`.
 

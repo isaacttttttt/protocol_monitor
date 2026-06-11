@@ -30,7 +30,7 @@ automation:
 
 report:
   include_protocol_analysis: true
-  use_deepseek_analysis: true
+  use_llm_analysis: true
   crypto_symbols: ["ETHUSDT", "BTCUSDT"]
   equity_symbols: ["CRCL", "WDC", "ARM", "INTU", "INFQ"]
   equity_context_symbols: ["SPY", "QQQ", "IWM", "XLK", "SMH"]

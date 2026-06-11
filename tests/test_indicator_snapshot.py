@@ -156,7 +156,7 @@ def test_watchlist_env_overrides_yaml_symbols():
 
 
 @pytest.mark.asyncio
-async def test_missing_deepseek_key_still_archives_snapshot(tmp_path, monkeypatch):
+async def test_missing_llm_config_still_archives_snapshot(tmp_path, monkeypatch):
     snapshot = {
         "run_id": "test-run",
         "generated_at": "2026-01-01T00:00:00+00:00",
@@ -185,10 +185,6 @@ async def test_missing_deepseek_key_still_archives_snapshot(tmp_path, monkeypatc
     settings = Settings(
         llm_config="",
         llm_api_key="",
-        llm_base_url="",
-        llm_chat_completions_url="",
-        llm_model="",
-        deepseek_api_key="",
         indicator_archive_path=str(archive_path),
     )
 
@@ -202,8 +198,9 @@ async def test_missing_deepseek_key_still_archives_snapshot(tmp_path, monkeypatc
         DummyArchiveRepository(),
     )
 
-    assert title == "SPM 2H DeepSeek 协议监控报告"
-    assert "DeepSeek API 配置未完成" in body
+    assert title == "SPM 2H LLM 协议监控报告"
+    assert "LLM API 配置未完成" in body
+    assert "LLM_CONFIG is required" in body
     assert saved["payload"]["run_id"] == "test-run"
     archived = json.loads(archive_path.read_text(encoding="utf-8").strip())
     assert archived["run_id"] == "test-run"
@@ -255,7 +252,6 @@ async def test_stream_llm_protocol_report_parts_calls_llm_per_symbol(tmp_path, m
     monkeypatch.setattr(llm_protocol_report, "OpenAICompatibleClient", FakeLlmClient)
     monkeypatch.setattr(llm_protocol_report, "iter_indicator_snapshot_events", fake_events)
     settings = Settings(
-        deepseek_api_key="test-key",
         crypto_protocol_path=str(protocol_path),
         equity_protocol_path=str(protocol_path),
         indicator_archive_path=str(archive_path),

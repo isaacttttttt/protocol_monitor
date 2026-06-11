@@ -84,7 +84,7 @@ class PeriodicReporter:
     async def build(self, hours: int) -> tuple[str, str]:
         recent_signals, strategy_count, kline_count = await self._report_context(hours)
         report_config = self.system_config.get("report", {})
-        if report_config.get("include_protocol_analysis", True) and report_config.get("use_deepseek_analysis", True):
+        if report_config.get("include_protocol_analysis", True) and report_config.get("use_llm_analysis", True):
             return await build_llm_protocol_report(
                 self.settings,
                 self.system_config,
@@ -106,7 +106,7 @@ class PeriodicReporter:
 
     async def send(self, hours: int) -> None:
         report_config = self.system_config.get("report", {})
-        if report_config.get("include_protocol_analysis", True) and report_config.get("use_deepseek_analysis", True):
+        if report_config.get("include_protocol_analysis", True) and report_config.get("use_llm_analysis", True):
             await self._send_llm_stream(hours)
             return
 

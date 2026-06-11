@@ -75,8 +75,6 @@ def resolve_config_api_key(settings: Settings, config: LlmProviderConfig) -> str
     env_name = config.api_key_env.strip()
     if env_name == "LLM_API_KEY":
         return settings.llm_api_key.strip()
-    if env_name == "DEEPSEEK_API_KEY":
-        return settings.deepseek_api_key.strip()
     return os.getenv(env_name, "").strip()
 
 
