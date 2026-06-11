@@ -131,10 +131,12 @@ python -m app.main report --hours 1 --send
 with cron schedule:
 
 ```text
-0 2,6,9,12,14,18 * * *
+0 4,14,18,22 * * *
 ```
 
-Railway schedules are UTC. This maps to UTC+8 report times: 10:00, 14:00, 17:00, 20:00, 22:00, and 02:00.
+Railway schedules are UTC. This primary service maps to UTC+8 report times: 12:00, 22:00, 02:00, and 06:00.
+
+To complete the requested UTC+8 run times of 02:00, 06:00, 12:00, 16:30, and 22:00, create a second Railway Cron service with the same start command and schedule `30 8 * * *` for the 16:30 run. A single standard cron expression cannot exactly combine one half-hour run with multiple top-of-hour runs without adding extra runs.
 
 See `RAILWAY.md` for the full deployment steps and required Railway variables.
 
