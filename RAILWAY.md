@@ -35,17 +35,9 @@ YAHOO_CHART_BASE=https://query1.finance.yahoo.com/v8/finance/chart
 WATCHLIST_CRYPTO_SYMBOLS=ETHUSDT,BTCUSDT
 WATCHLIST_EQUITY_SYMBOLS=CRCL,WDC,ARM,INTU,INFQ
 EQUITY_CONTEXT_SYMBOLS=SPY,QQQ,IWM,XLK,SMH
-LLM_PROVIDER_NAME=FineRes
+LLM_CONFIG=fineres
+LLM_CONFIG_DIR=configs/llms
 LLM_API_KEY=<your-llm-api-key>
-LLM_BASE_URL=https://it-ai.fineres.com/v1
-LLM_CHAT_COMPLETIONS_URL=
-LLM_CHAT_COMPLETIONS_PATH=/chat/completions
-LLM_MODEL=gpt-5.5
-LLM_THINKING=
-LLM_REASONING_EFFORT=
-LLM_TEMPERATURE=0.2
-LLM_MAX_TOKENS=6000
-LLM_TIMEOUT_SECONDS=300
 DEEPSEEK_API_KEY=
 DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_MODEL=deepseek-v4-pro
@@ -61,7 +53,11 @@ EQUITY_PROTOCOL_PATH=protocols/equity_smartmoney_protocol_v17.md
 
 `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` can stay empty unless you also want Telegram.
 
-`DEEPSEEK_*` is a legacy fallback and is used only when `LLM_*` is not configured.
+`LLM_CONFIG` selects a YAML file under `configs/llms/`. Provider URL, model, timeout, and request parameters live there; only `LLM_API_KEY` remains external.
+
+`DEEPSEEK_*` is a legacy fallback and is used only when `LLM_CONFIG` and `LLM_*` are not configured.
+
+For FineRes, use `LLM_CONFIG=fineres`. `configs/llms/fineres.yaml` follows the native Chat Completions request body and does not send the non-standard `thinking` parameter. `reasoning_effort`, if added to that YAML, must be `low`, `medium`, or `high`.
 
 To add or remove monitored symbols, edit `WATCHLIST_CRYPTO_SYMBOLS` and `WATCHLIST_EQUITY_SYMBOLS` in Railway Variables and redeploy/restart the Cron service. No code push is needed.
 
@@ -88,7 +84,7 @@ Without Postgres or a volume, the Feishu report still works, but historical indi
    - Start Command: `python -m app.main report --hours 1 --send`
    - Cron Schedule: `0 2,6,9,12,14,18 * * *`
 5. Add the variables above in the service Variables tab.
-6. Deploy and open Logs to confirm the report prints and Feishu receives `SPM 1H FineRes 协议监控报告` or the provider name configured in `LLM_PROVIDER_NAME`.
+6. Deploy and open Logs to confirm the report prints and Feishu receives `SPM 1H FineRes 协议监控报告` or the provider name configured in `configs/llms/<LLM_CONFIG>.yaml`.
 
 ## Manual Test
 

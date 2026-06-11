@@ -1,0 +1,16 @@
+provider_name: DeepSeek
+api_key_env: LLM_API_KEY
+base_url: https://api.deepseek.com
+chat_completions_path: /chat/completions
+model: deepseek-v4-pro
+timeout_seconds: 300
+allowed_params:
+  - max_tokens
+  - temperature
+  - thinking
+  - reasoning_effort
+parameters:
+  max_tokens: 6000
+  thinking:
+    type: enabled
+  reasoning_effort: max

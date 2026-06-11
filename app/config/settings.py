@@ -18,12 +18,15 @@ class Settings(BaseSettings):
     watchlist_crypto_symbols: str = ""
     watchlist_equity_symbols: str = ""
     equity_context_symbols: str = ""
+    llm_config: str = ""
+    llm_config_dir: str = "configs/llms"
     llm_provider_name: str = ""
     llm_api_key: str = ""
     llm_base_url: str = ""
     llm_chat_completions_url: str = ""
     llm_chat_completions_path: str = "/chat/completions"
     llm_model: str = ""
+    llm_include_thinking: bool = False
     llm_thinking: str = ""
     llm_reasoning_effort: str = ""
     llm_temperature: float = 0.2

@@ -15,7 +15,7 @@ It does not place orders, manage exchange accounts, or require trading permissio
 - ATR, MACD, CVD proxy, VWAP, simplified market structure.
 - Protocol report chain: external market data -> indicator snapshot -> archive -> per-symbol LLM analysis -> streaming Feishu report.
 - Crypto protocol v16 and Equity protocol v17 are versioned under `protocols/`.
-- OpenAI-compatible chat completions adapter, with legacy DeepSeek settings still supported.
+- Config-file driven OpenAI-compatible chat completions adapter, with legacy DeepSeek settings still supported.
 - Indicator archive table plus local JSONL archive.
 - Indicator inventory in `docs/INDICATORS.md`.
 - BTC strong bullish / strong bearish filter.
@@ -54,19 +54,11 @@ YAHOO_CHART_BASE=https://query1.finance.yahoo.com/v8/finance/chart
 WATCHLIST_CRYPTO_SYMBOLS=ETHUSDT,BTCUSDT
 WATCHLIST_EQUITY_SYMBOLS=CRCL,WDC,ARM,INTU,INFQ
 EQUITY_CONTEXT_SYMBOLS=SPY,QQQ,IWM,XLK,SMH
-LLM_PROVIDER_NAME=FineRes
+LLM_CONFIG=fineres
+LLM_CONFIG_DIR=configs/llms
 LLM_API_KEY=
-LLM_BASE_URL=https://it-ai.fineres.com/v1
-LLM_CHAT_COMPLETIONS_URL=
-LLM_CHAT_COMPLETIONS_PATH=/chat/completions
-LLM_MODEL=gpt-5.5
-LLM_THINKING=
-LLM_REASONING_EFFORT=
-LLM_TEMPERATURE=0.2
-LLM_MAX_TOKENS=6000
-LLM_TIMEOUT_SECONDS=300
 
-# Legacy fallback, used only when LLM_* is not configured.
+# Legacy fallback, used only when LLM_CONFIG and LLM_* are not configured.
 DEEPSEEK_API_KEY=
 DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_MODEL=deepseek-v4-pro
@@ -81,6 +73,8 @@ EQUITY_PROTOCOL_PATH=protocols/equity_smartmoney_protocol_v17.md
 ```
 
 All tokens and webhook secrets live in this configuration layer. Do not edit them into Python files.
+
+LLM provider details live under `configs/llms/`. Use `LLM_CONFIG=fineres` to select `configs/llms/fineres.yaml`; switch providers by changing `LLM_CONFIG` and `LLM_API_KEY`. URL, model, timeout, and provider-specific request parameters belong in the YAML file, not in `.env`.
 
 Watchlist variables override `configs/system.yaml`. Use comma, semicolon, newline, or spaces as separators. For example:
 
@@ -215,7 +209,9 @@ report:
 
 On Railway, prefer changing `WATCHLIST_CRYPTO_SYMBOLS` and `WATCHLIST_EQUITY_SYMBOLS` in Variables instead of editing this YAML.
 
-If `LLM_API_KEY` and the legacy `DEEPSEEK_API_KEY` are empty, the report command still fetches market data, calculates indicators, archives the snapshot, and prints a configuration warning. Once the key is present, the same command calls the configured LLM separately for each symbol and sends each protocol report as soon as it is generated.
+If the selected `LLM_CONFIG` has no API key in its configured key environment variable, and the legacy `DEEPSEEK_API_KEY` fallback is also empty, the report command still fetches market data, calculates indicators, archives the snapshot, and prints a configuration warning. Once the key is present, the same command calls the configured LLM separately for each symbol and sends each protocol report as soon as it is generated.
+
+FineRes follows the native OpenAI Chat Completions request body. The repository's `configs/llms/fineres.yaml` does not include the non-standard `thinking` parameter, so FineRes will not receive it. If you add `reasoning_effort`, FineRes accepts only `low`, `medium`, or `high`.
 
 ## Codex Automation
 

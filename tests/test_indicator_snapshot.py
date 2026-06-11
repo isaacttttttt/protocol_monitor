@@ -183,6 +183,11 @@ async def test_missing_deepseek_key_still_archives_snapshot(tmp_path, monkeypatc
 
     monkeypatch.setattr(llm_protocol_report, "build_indicator_snapshot", lambda _system_config, _settings=None: dict(snapshot))
     settings = Settings(
+        llm_config="",
+        llm_api_key="",
+        llm_base_url="",
+        llm_chat_completions_url="",
+        llm_model="",
         deepseek_api_key="",
         indicator_archive_path=str(archive_path),
     )
