@@ -2,7 +2,7 @@ provider_name: FineRes
 api_key_env: LLM_API_KEY
 base_url: https://it-ai.fineres.com/v1
 chat_completions_path: /chat/completions
-model: deepseek-v4-flash
+model: gpt-5.5
 timeout_seconds: 300
 allowed_params:
   - max_tokens
@@ -26,3 +26,4 @@ allowed_params:
 parameters:
   max_tokens: 6000
   temperature: 0.2
+  reasoning_effort : medium
