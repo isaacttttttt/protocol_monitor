@@ -12,21 +12,11 @@ builder = "DOCKERFILE"
 
 [deploy]
 startCommand = "python -m app.main report --hours 1 --send"
-cronSchedule = "0 4,14,18,22 * * *"
+cronSchedule = "0 2,10,16,22 * * *"
 restartPolicyType = "NEVER"
 ```
 
-Railway schedules are UTC. The requested UTC+8 report times are 02:00, 06:00, 12:00, 16:30, and 22:00.
-
-The repository's primary Cron service uses `0 4,14,18,22 * * *`, which means 04:00, 14:00, 18:00, and 22:00 UTC. In UTC+8, that is 12:00, 22:00, 02:00, and 06:00.
-
-For the 16:30 UTC+8 report, create a second Railway Cron service with the same start command and this schedule:
-
-```text
-30 8 * * *
-```
-
-A single standard cron expression cannot exactly combine one half-hour run with multiple top-of-hour runs without adding extra runs.
+Railway schedules are UTC. The Cron service uses `0 2,10,16,22 * * *`, which triggers at 02:00, 10:00, 16:00, and 22:00 UTC.
 
 ## Required Variables
 
@@ -82,12 +72,9 @@ Without Postgres or a volume, the Feishu report still works, but historical indi
 3. Keep the generated service as a Cron Job service.
 4. Confirm the service settings show:
    - Start Command: `python -m app.main report --hours 1 --send`
-   - Cron Schedule: `0 4,14,18,22 * * *`
-5. Create a second Cron Job service from the same repo for the 16:30 UTC+8 run:
-   - Start Command: `python -m app.main report --hours 1 --send`
-   - Cron Schedule: `30 8 * * *`
-6. Add the variables above in each service's Variables tab.
-7. Deploy and open Logs to confirm the report prints and Feishu receives `SPM 1H FineRes 协议监控报告` or the provider name configured in `configs/llms/<LLM_CONFIG>.yaml`.
+   - Cron Schedule: `0 2,10,16,22 * * *`
+5. Add the variables above in the service Variables tab.
+6. Deploy and open Logs to confirm the report prints and Feishu receives `SPM 1H FineRes 协议监控报告` or the provider name configured in `configs/llms/<LLM_CONFIG>.yaml`.
 
 ## Manual Test
 

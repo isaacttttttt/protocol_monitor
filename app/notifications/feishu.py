@@ -11,16 +11,35 @@ MAX_POST_BODY_BYTES = 18_000
 MAX_CARD_TEXT_CHARS = 6_000
 
 TOP_LEVEL_LABELS = (
+    "标的",
+    "市场",
+    "时间",
+    "当前价格",
+    "数据源",
+    "数据质量",
     "机会等级",
     "交易机会",
     "机会类型",
     "数据时间 / 数据源 / 数据质量",
     "当前状态",
+    "策略结论",
     "协议命中",
     "关键证据",
+    "核心证据1",
+    "核心证据2",
+    "核心证据3",
     "Micro",
     "Macro",
     "最终交易指令",
+    "当前指令",
+    "方向",
+    "Entry/触发",
+    "SL/失效",
+    "TP/RR",
+    "时间止损",
+    "仓位",
+    "预警",
+    "一句话",
     "执行校准",
 )
 
@@ -28,6 +47,11 @@ TOP_LEVEL_LABELS = (
 @dataclass(frozen=True)
 class ProtocolReportSummary:
     heading: str
+    symbol: str
+    market: str
+    report_time: str
+    current_price: str
+    data_source: str
     level: str
     trade_opportunity: str
     opportunity_type: str
@@ -43,6 +67,7 @@ class ProtocolReportSummary:
     long_alert: str
     short_alert: str
     macro_alert: str
+    alerts: str
     conclusion: str
     evidence: list[str]
     data_quality: str
@@ -137,6 +162,27 @@ def build_protocol_card_payload(title: str, summary: ProtocolReportSummary, keyw
         {"tag": "hr"},
     ]
 
+    basics = _join_compact(
+        [
+            summary.symbol,
+            summary.market,
+            f"价格 {summary.current_price}" if summary.current_price else "",
+            f"时间 {summary.report_time}" if summary.report_time else "",
+            f"数据源 {summary.data_source}" if summary.data_source else "",
+        ],
+        " | ",
+    )
+    if basics:
+        elements.append(
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": _trim_card_text(f"**基础信息**\n{basics}", 600),
+                },
+            }
+        )
+
     plan_fields = [("Entry", summary.entry), ("SL", summary.stop_loss), ("TP/RR", _join_compact([summary.targets, summary.rr], " / "))]
     watch_fields = [("触发", summary.trigger), ("失效", summary.invalidation)]
     fields = _card_fields(
@@ -164,12 +210,14 @@ def build_protocol_card_payload(title: str, summary: ProtocolReportSummary, keyw
             }
         )
 
-    alert_lines = [
-        _label_line("多头", summary.long_alert),
-        _label_line("空头", summary.short_alert),
-        _label_line("Macro", summary.macro_alert),
-    ]
-    alert_content = "\n".join(line for line in alert_lines if line)
+    alert_content = summary.alerts
+    if not alert_content:
+        alert_lines = [
+            _label_line("多头", summary.long_alert),
+            _label_line("空头", summary.short_alert),
+            _label_line("Macro", summary.macro_alert),
+        ]
+        alert_content = "\n".join(line for line in alert_lines if line)
     if alert_content:
         elements.append(
             {
@@ -223,13 +271,69 @@ def parse_protocol_report_summary(title: str, body: str) -> ProtocolReportSummar
     if not _looks_like_protocol_report(body):
         return None
 
+    base_block = _extract_heading_section(body, "标的基础信息")
+    analysis_block = _extract_heading_section(body, "策略分析结论")
+    execution_block = _extract_heading_section(body, "推荐执行策略")
+    if analysis_block or execution_block:
+        return _parse_three_part_protocol_summary(title, body, base_block, analysis_block, execution_block)
+
+    return _parse_legacy_protocol_summary(title, body)
+
+
+def _parse_three_part_protocol_summary(
+    title: str,
+    body: str,
+    base_block: str,
+    analysis_block: str,
+    execution_block: str,
+) -> ProtocolReportSummary | None:
+    heading = _extract_report_heading(body) or _clean_heading(title)
+    summary = ProtocolReportSummary(
+        heading=heading,
+        symbol=_brief_text(_extract_field(base_block, "标的") or _symbol_from_heading(heading), 40),
+        market=_brief_text(_extract_field(base_block, "市场") or _market_from_heading(heading), 40),
+        report_time=_brief_text(_extract_field(base_block, "时间"), 80),
+        current_price=_brief_text(_extract_field(base_block, "当前价格"), 60),
+        data_source=_brief_text(_extract_field(base_block, "数据源"), 80),
+        level=_brief_text(_extract_field(analysis_block, "机会等级") or _extract_field(body, "机会等级"), 40) or "UNKNOWN",
+        trade_opportunity=_brief_text(_extract_field(analysis_block, "交易机会") or _extract_field(body, "交易机会"), 30) or "未知",
+        opportunity_type=_brief_text(_extract_field(analysis_block, "机会类型"), 40) or "None",
+        current_status=_brief_text(_extract_field(analysis_block, "策略结论"), 180),
+        current_instruction=_brief_text(_extract_field(execution_block, "当前指令"), 160),
+        direction=_brief_text(_extract_field(execution_block, "方向"), 80),
+        entry=_brief_text(_extract_field(execution_block, "Entry/触发"), 180),
+        stop_loss=_brief_text(_extract_field(execution_block, "SL/失效"), 120),
+        targets=_brief_text(_extract_field(execution_block, "TP/RR"), 160),
+        rr="",
+        trigger=_brief_text(_extract_field(execution_block, "Entry/触发"), 180),
+        invalidation=_brief_text(_extract_field(execution_block, "SL/失效"), 160),
+        long_alert="",
+        short_alert="",
+        macro_alert="",
+        alerts=_brief_text(_extract_field(execution_block, "预警"), 220),
+        conclusion=_brief_text(_extract_field(execution_block, "一句话") or _extract_field(analysis_block, "策略结论"), 180),
+        evidence=_summarize_three_part_evidence(analysis_block),
+        data_quality=_brief_text(_extract_field(base_block, "数据质量"), 220),
+    )
+    if not any((summary.level, summary.current_instruction, summary.current_status, summary.evidence)):
+        return None
+    return summary
+
+
+def _parse_legacy_protocol_summary(title: str, body: str) -> ProtocolReportSummary | None:
     final_block = _extract_top_block(body, "最终交易指令")
     micro_block = _extract_top_block(body, "Micro")
     macro_block = _extract_top_block(body, "Macro")
     evidence_block = _extract_top_block(body, "关键证据")
+    heading = _extract_report_heading(body) or _clean_heading(title)
 
     summary = ProtocolReportSummary(
-        heading=_extract_report_heading(body) or _clean_heading(title),
+        heading=heading,
+        symbol=_symbol_from_heading(heading),
+        market=_market_from_heading(heading),
+        report_time="",
+        current_price="",
+        data_source="",
         level=_brief_text(_first_line(_extract_top_block(body, "机会等级")), 40) or "UNKNOWN",
         trade_opportunity=_brief_text(_first_line(_extract_top_block(body, "交易机会")), 30) or "未知",
         opportunity_type=_brief_text(_first_line(_extract_top_block(body, "机会类型")), 40) or "None",
@@ -251,6 +355,7 @@ def parse_protocol_report_summary(title: str, body: str) -> ProtocolReportSummar
         long_alert=_brief_text(_extract_bullet_value(final_block, "多头预警"), 180),
         short_alert=_brief_text(_extract_bullet_value(final_block, "空头预警"), 180),
         macro_alert=_brief_text(_extract_bullet_value(final_block, "Macro 预警"), 180),
+        alerts="",
         conclusion=_brief_text(_extract_bullet_value(final_block, "一句话结论"), 180),
         evidence=_summarize_evidence(evidence_block),
         data_quality=_brief_text(_extract_top_block(body, "数据时间 / 数据源 / 数据质量"), 220),
@@ -348,10 +453,12 @@ def _body_to_post_lines(body: str) -> list[list[dict[str, str]]]:
 
 
 def _looks_like_protocol_report(body: str) -> bool:
-    return bool(
-        re.search(r"^机会等级\s*[：:]", body, flags=re.MULTILINE)
-        and re.search(r"^交易机会\s*[：:]", body, flags=re.MULTILINE)
+    has_labels = bool(
+        re.search(r"^\s*-?\s*机会等级\s*[：:]", body, flags=re.MULTILINE)
+        and re.search(r"^\s*-?\s*交易机会\s*[：:]", body, flags=re.MULTILINE)
     )
+    has_three_parts = all(text in body for text in ("标的基础信息", "策略分析结论", "推荐执行策略"))
+    return has_labels or has_three_parts
 
 
 def _extract_report_heading(body: str) -> str:
@@ -362,10 +469,43 @@ def _extract_report_heading(body: str) -> str:
     return ""
 
 
+def _extract_heading_section(body: str, heading_keyword: str) -> str:
+    lines = body.splitlines()
+    in_section = False
+    collected: list[str] = []
+    for line in lines:
+        heading = re.match(r"^#{2,5}\s*(?:\d+[.、]\s*)?(.+?)\s*$", line.strip())
+        if heading:
+            clean_heading = _clean_heading(heading.group(1))
+            if heading_keyword in clean_heading:
+                in_section = True
+                collected = []
+                continue
+            if in_section:
+                break
+        elif in_section:
+            collected.append(line)
+    return _clean_block("\n".join(collected))
+
+
 def _extract_top_block(body: str, label: str) -> str:
     labels = "|".join(re.escape(item) for item in TOP_LEVEL_LABELS if item != label)
     pattern = rf"(?ms)^\s*{re.escape(label)}\s*[：:]\s*(.*?)(?=^\s*(?:{labels})\s*[：:]|\Z)"
     match = re.search(pattern, body)
+    if not match:
+        return ""
+    return _clean_block(match.group(1))
+
+
+def _extract_field(block: str, label: str) -> str:
+    return _extract_bullet_value(block, label) or _extract_line_value(block, label)
+
+
+def _extract_line_value(block: str, label: str) -> str:
+    if not block:
+        return ""
+    pattern = rf"(?m)^\s*(?:-\s*)?{re.escape(label)}\s*[：:]\s*(.+?)\s*$"
+    match = re.search(pattern, block)
     if not match:
         return ""
     return _clean_block(match.group(1))
@@ -380,6 +520,17 @@ def _extract_bullet_value(block: str, label: str) -> str:
     if not match:
         return ""
     return _clean_block(match.group(1))
+
+
+def _summarize_three_part_evidence(block: str) -> list[str]:
+    evidence: list[str] = []
+    for index in range(1, 4):
+        value = _extract_field(block, f"核心证据{index}")
+        if value:
+            evidence.append(_brief_text(value, 150))
+    if evidence:
+        return evidence
+    return _summarize_evidence(block)
 
 
 def _summarize_evidence(block: str) -> list[str]:
@@ -418,6 +569,19 @@ def _parse_bullets(block: str) -> dict[str, str]:
     if current_label:
         result[current_label] = _clean_block("\n".join(current_lines))
     return result
+
+
+def _symbol_from_heading(heading: str) -> str:
+    match = re.search(r"标的[：:]\s*([A-Z0-9._/-]+)", heading)
+    if match:
+        return match.group(1)
+    match = re.search(r"\b[A-Z]{1,10}(?:[-_/]?[A-Z0-9]{1,10})?\b", heading)
+    return match.group(0) if match else ""
+
+
+def _market_from_heading(heading: str) -> str:
+    match = re.search(r"[（(]([^()（）]+)[）)]", heading)
+    return match.group(1).strip() if match else ""
 
 
 def _card_fields(items: list[tuple[str, str]]) -> list[dict]:

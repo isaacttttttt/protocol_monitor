@@ -30,6 +30,18 @@ class LlmProtocolReportPart:
     has_trade_opportunity: bool = False
 
 
+def _strategy_trader_system_prompt(scope: str) -> str:
+    return (
+        f"你是 SmartMoney Protocol Monitor 的{scope}。"
+        "你的定位是资深策略交易员，长期专注美股标的、ETF、加密货币与跨市场风险传导。"
+        "你擅长识别趋势切换、流动性扫荡、动能衰竭、风险偏好迁移，并把复杂指标压缩成可执行下注计划。"
+        "你的工作方式是概率化推演：先判断市场状态，再评估触发条件、赔率、失效点和仓位折扣。"
+        "严格只使用用户提供的协议文本与指标快照，不编造缺失数据；缺真实 CVD、Cluster、清算、期权流或 Gamma 数据时要降级置信度。"
+        "严格风控不等于默认禁止；证据不足但路径清晰时给 WATCH 或 ARMED，只有触发失效、R/R 不足或高周期硬冲突时才禁止。"
+        "输出是监控和交易计划，不代表自动下单；语言要像给交易员的盘前/盘中执行卡片，短、准、可行动。"
+    )
+
+
 async def build_llm_protocol_report(
     settings: Settings,
     system_config: dict[str, Any],
@@ -180,34 +192,20 @@ def _messages(
     crypto_protocol: str,
     equity_protocol: str,
 ) -> list[dict[str, str]]:
-    system = (
-        "你是 SmartMoney Protocol Monitor 的协议执行代理。"
-        "你只根据用户提供的协议文本与指标快照进行分析，不允许编造缺失数据。"
-        "当真实 CVD、Cluster、Liquidation、Options Flow、Gamma Exposure 缺失时，必须显式降级判断。"
-        "你输出的是监控与交易计划，不代表自动下单；禁止写成已经执行交易。"
-        "Micro 与 Macro 必须分离，必须给出触发条件、失效条件、目标位和风险降级说明。"
-        "输出中文，简洁但不能省略关键证据。"
-    )
+    system = _strategy_trader_system_prompt("多标的策略交易员")
     user = f"""
 请按照以下协议，对指标快照中的全部标的生成 {hours}H 监控报告。
 
 硬性输出格式：
 1. 标题使用「SPM {hours}H 监控报告」。
 2. 先给「总览」：市场状态、风险开关、今天最需要等的触发。
-3. 每个标的必须使用独立二级标题「## 标的：SYMBOL（市场）」；不得把多个标的合并成批量简报。
-4. 每个标的都必须包含：
-   - 数据时间 / 数据源 / 数据质量
-   - 当前状态
-   - 是否命中：命中或未命中哪些协议模式；缺数据必须写未命中或降级
-   - 建议1
-   - 建议2
-   - Micro：方向、触发条件、失效条件、48H 时间止损
-   - Macro：方向、关键收复/跌破位、是否进入观察池
-   - 关键指标证据：结构、ATR、MACD、VWAP/AVWAP、VP POC/HVN/LVN/VA、Volume Delta Profile、Taker Delta 或 OHLCV Delta Flow、CVD slope/acceleration/背离/吸收、OBV/A-D/NVI、FVG/Order Block/Displacement/流动性池、Confluence flags、量能、Funding/OI 或相对强弱
-   - 最终交易指令：当前指令、多头预警、空头预警、Macro 预警、一句话结论
-5. 对 BTC 只能作为 ETH 风险过滤器，除非协议文本要求独立分析。
-6. 对美股必须考虑 External / Index / Sector / Asset Execution 四层。
-7. 语言要像给交易员的执行简报，不要写教学说明。
+3. 每个标的必须使用独立二级标题「## 标的：SYMBOL（市场）」；每个标的只写以下三块：
+   - ### 1. 标的基础信息
+   - ### 2. 策略分析结论
+   - ### 3. 推荐执行策略
+4. 对 BTC 只能作为 ETH 风险过滤器，除非协议文本要求独立分析。
+5. 对美股必须考虑 External / Index / Sector / Asset Execution 四层。
+6. 每个标的控制在 500 中文字以内；不要写教学说明。
 
 【Crypto 协议 v16】
 {crypto_protocol}
@@ -229,56 +227,42 @@ def _symbol_messages(
     protocol: str,
 ) -> list[dict[str, str]]:
     market_label = _market_label(market)
-    system = (
-        "你是 SmartMoney Protocol Monitor 的单标的协议执行代理。"
-        "你只根据用户提供的协议文本与指标快照进行分析，不允许编造缺失数据。"
-        "这是按历史复盘校准后的执行口径：严格风控不等于默认禁止，缺失真实 CVD、Cluster、清算、期权或 Gamma 数据时，"
-        "应降低置信度、胜率区间和仓位，而不是自动否决所有交易设想。"
-        "只有无明确 SL、TP1 R/R 明确低于 1.5R、触发条件已经失效、或高周期/风险过滤出现硬冲突时，才写禁止交易。"
-        "若证据不够开仓但有清晰触发路径，必须给 WATCH 或 ARMED，而不是笼统写无机会。"
-        "你输出的是监控与交易计划，不代表自动下单；禁止写成已经执行交易。"
-        "输出中文，像给交易员的执行简报。"
-    )
+    system = _strategy_trader_system_prompt("单标的策略交易员")
     user = f"""
 请只分析这一个标的：{symbol}（{market_label}），生成 {hours}H 单标的协议报告。
 
-输出必须使用以下格式，不要合并其他标的：
+输出必须严格使用以下三段格式，不要合并其他标的，不要增加第四段：
 
 ## 标的：{symbol}（{market_label}）
-机会等级：TRADE / ARMED / WATCH / NONE / DATA_ERROR
-交易机会：是/否
-机会类型：Micro / Macro / Both / None
-数据时间 / 数据源 / 数据质量：
-当前状态：
-协议命中：
-关键证据：
-- 结构：
-- 库存/VP/VWAP：
-- Flow/Delta：
-- 动能/波动：
-- 风险过滤：
-Micro：
-- 方向：
-- Entry：
-- SL：
-- TP1 / TP2 / TP3：
-- TP1 R/R：
-- 时间止损：
-- 条件胜率区间：
-- 仓位：
-- 触发条件：
-- 失效条件：
-Macro：
-- 状态：
-- 方向：
-- 观察/建仓条件：
-- 核心失效线：
-最终交易指令：
+
+### 1. 标的基础信息
+- 标的：{symbol}
+- 市场：{market_label}
+- 时间：
+- 当前价格：
+- 数据源：
+- 数据质量：
+
+### 2. 策略分析结论
+- 机会等级：TRADE / ARMED / WATCH / NONE / DATA_ERROR
+- 交易机会：是/否
+- 机会类型：Micro / Macro / Both / None
+- 策略结论：一句话说明当前最重要判断
+- 协议命中：只写命中的 1-2 个协议模式；没有则写未命中
+- 核心证据1：
+- 核心证据2：
+- 核心证据3：
+
+### 3. 推荐执行策略
 - 当前指令：
-- 多头预警：
-- 空头预警：
-- Macro 预警：
-- 一句话结论：
+- 方向：
+- Entry/触发：
+- SL/失效：
+- TP/RR：
+- 时间止损：
+- 仓位：
+- 预警：
+- 一句话：
 
 执行校准：
 1. TRADE = 当前已满足协议触发，并且有 Entry/SL/TP/RR；可推送为交易机会。
@@ -291,11 +275,11 @@ Macro：
 8. 对美股：必须考虑 External / Index / Sector / Asset Execution 四层；缺外部/板块数据时降级，不自动禁止所有 Micro 机会。
 
 长度控制：
-1. 当前状态最多 2 句，每句不超过 60 个中文字符。
-2. 关键证据最多 5 条，每条只写结论 + 最关键数字，不写推导长段。
-3. Micro / Macro 每个字段只保留最可执行的一条方案；交易机会为否时，不要同时展开多空完整 TP/SL 方案。
-4. 最终交易指令必须最短、最清楚，优先写“现在做什么 / 等什么 / 什么情况作废”。
-5. 不写教学解释，不复述完整指标清单。
+1. 全文 350-650 中文字；每个字段最多 1 句。
+2. 核心证据只写结论 + 最关键数字，不写推导长段。
+3. 推荐执行策略只保留最优先的一条路径；交易机会为否时，Entry/SL/TP 写“等待/不适用/触发后再定”，不要展开多空两套方案。
+4. 当前指令必须最短、最清楚，优先写“现在做什么 / 等什么 / 什么情况作废”。
+5. 不写教学解释，不复述完整指标清单，不输出原始 JSON。
 
 【本标的协议】
 {protocol}
@@ -347,18 +331,35 @@ def _symbol_data_error_body(symbol: str, market: str, item: dict[str, Any]) -> s
     return "\n".join(
         [
             f"## 标的：{symbol}（{_market_label(market)}）",
-            "机会等级：DATA_ERROR",
-            "交易机会：否",
-            "机会类型：None",
-            f"数据时间 / 数据源 / 数据质量：数据失败；error={item.get('error')}",
-            "当前状态：数据不足，暂不做协议判断。",
-            "协议命中：未命中，等待下一轮数据恢复。",
-            "最终交易指令：",
+            "",
+            "### 1. 标的基础信息",
+            f"- 标的：{symbol}",
+            f"- 市场：{_market_label(market)}",
+            "- 时间：不可用",
+            "- 当前价格：不可用",
+            "- 数据源：不可用",
+            f"- 数据质量：数据失败；error={item.get('error')}",
+            "",
+            "### 2. 策略分析结论",
+            "- 机会等级：DATA_ERROR",
+            "- 交易机会：否",
+            "- 机会类型：None",
+            "- 策略结论：数据不足，暂不做协议判断。",
+            "- 协议命中：未命中，等待下一轮数据恢复。",
+            "- 核心证据1：行情数据失败。",
+            "- 核心证据2：指标快照不可用。",
+            "- 核心证据3：风控要求禁止基于缺失数据开仓。",
+            "",
+            "### 3. 推荐执行策略",
             "- 当前指令：数据不足，禁止开仓。",
-            "- 多头预警：等待数据恢复后重新计算。",
-            "- 空头预警：等待数据恢复后重新计算。",
-            "- Macro 预警：数据源未恢复前不做高周期判断。",
-            "- 一句话结论：先修数据，再谈交易。",
+            "- 方向：None",
+            "- Entry/触发：等待数据恢复后重新计算。",
+            "- SL/失效：不适用。",
+            "- TP/RR：不适用。",
+            "- 时间止损：不适用。",
+            "- 仓位：0R。",
+            "- 预警：数据源恢复后重新跑协议。",
+            "- 一句话：先修数据，再谈交易。",
         ]
     )
 
@@ -366,11 +367,35 @@ def _symbol_data_error_body(symbol: str, market: str, item: dict[str, Any]) -> s
 def _symbol_llm_error_body(exc: Exception, symbol: str, market: str, snapshot: dict[str, Any]) -> str:
     lines = [
         f"## 标的：{symbol}（{_market_label(market)}）",
-        "机会等级：DATA_ERROR",
-        "交易机会：否",
-        "机会类型：None",
-        "大模型单标的调用失败，已完成该标的指标计算，本轮不做交易机会判断。",
-        f"错误：{exc}",
+        "",
+        "### 1. 标的基础信息",
+        f"- 标的：{symbol}",
+        f"- 市场：{_market_label(market)}",
+        "- 时间：见本轮指标快照摘要",
+        "- 当前价格：见本轮指标快照摘要",
+        "- 数据源：见本轮指标快照摘要",
+        "- 数据质量：指标已计算，大模型调用失败。",
+        "",
+        "### 2. 策略分析结论",
+        "- 机会等级：DATA_ERROR",
+        "- 交易机会：否",
+        "- 机会类型：None",
+        "- 策略结论：大模型单标的调用失败，本轮不做交易机会判断。",
+        "- 协议命中：未判断。",
+        f"- 核心证据1：错误：{exc}",
+        "- 核心证据2：指标计算已完成。",
+        "- 核心证据3：缺少 LLM 判断，禁止生成交易计划。",
+        "",
+        "### 3. 推荐执行策略",
+        "- 当前指令：不交易，等待下一轮 LLM 恢复。",
+        "- 方向：None",
+        "- Entry/触发：不适用。",
+        "- SL/失效：不适用。",
+        "- TP/RR：不适用。",
+        "- 时间止损：不适用。",
+        "- 仓位：0R。",
+        "- 预警：检查 LLM API 配置或服务状态。",
+        "- 一句话：模型失败时不下注。",
         "",
         "本轮指标快照摘要：",
         *summarize_snapshot_for_report(snapshot),

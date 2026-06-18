@@ -68,6 +68,50 @@ Micro：
     assert "242.00" not in rendered
 
 
+def test_build_feishu_payload_supports_three_part_protocol_template():
+    body = """## 标的：SOXL（US Equity）
+
+### 1. 标的基础信息
+- 标的：SOXL
+- 市场：US Equity
+- 时间：2026-06-17T20:00:00+00:00
+- 当前价格：233.86
+- 数据源：Yahoo Finance chart
+- 数据质量：缺少真实CVD、期权流与Gamma，信号降级。
+
+### 2. 策略分析结论
+- 机会等级：WATCH
+- 交易机会：否
+- 机会类型：None
+- 策略结论：SOXL冲高回落后进入观察区，不追空也不抄底。
+- 协议命中：潜在流动性扫荡，未触发交易。
+- 核心证据1：结构转弱，价格跌破日内Opening Range低点。
+- 核心证据2：Flow proxy转负，15M/60M动能同步走弱。
+- 核心证据3：QQQ与SMH同步走弱，板块过滤不支持追多。
+
+### 3. 推荐执行策略
+- 当前指令：只观察，等233.30扫低后能否收回234.50。
+- 方向：等待反转确认
+- Entry/触发：收回234.50并放量。
+- SL/失效：跌破231.00则失效。
+- TP/RR：WATCH阶段不适用。
+- 时间止损：2个交易日。
+- 仓位：0R，触发后最多0.25R。
+- 预警：若反抽237.50失败，转为空头观察。
+- 一句话：SOXL当前只等确认，不抢方向。
+"""
+
+    payload = build_feishu_payload("SPM 1H SOXL 分析报告（US Equity）", body, "监控报告")
+
+    assert payload["msg_type"] == "interactive"
+    rendered = str(payload["card"]["elements"])
+    assert "基础信息" in rendered
+    assert "SOXL | US Equity | 价格 233.86" in rendered
+    assert "只观察，等233.30扫低后能否收回234.50" in rendered
+    assert "结构转弱" in rendered
+    assert "WATCH阶段不适用" not in rendered
+
+
 def test_build_feishu_payload_keeps_plain_reports_as_post():
     payload = build_feishu_payload("SPM", "普通周期报告\n没有协议字段", "监控报告")
 
