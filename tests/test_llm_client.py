@@ -2,10 +2,33 @@ from app.config.settings import Settings
 from app.llm.openai_compatible import OpenAICompatibleClient
 
 
-def test_selected_llm_config_uses_yaml_payload_without_thinking():
+def test_selected_llm_config_uses_yaml_payload_without_thinking(tmp_path):
+    config_dir = tmp_path / "llms"
+    config_dir.mkdir()
+    (config_dir / "fineres.yaml").write_text(
+        "\n".join(
+            [
+                "provider_name: FineRes",
+                "api_key_env: LLM_API_KEY",
+                "base_url: https://it-ai.fineres.com/v1",
+                "chat_completions_path: /chat/completions",
+                "model: gpt-5.5",
+                "allowed_params:",
+                "  - max_tokens",
+                "  - temperature",
+                "parameters:",
+                "  max_tokens: 6000",
+                "  temperature: 0.2",
+                "  thinking:",
+                "    type: enabled",
+            ]
+        ),
+        encoding="utf-8",
+    )
     client = OpenAICompatibleClient(
         Settings(
             llm_config="fineres",
+            llm_config_dir=str(config_dir),
             llm_api_key="test-key",
         )
     )
