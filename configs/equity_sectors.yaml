@@ -1,0 +1,56 @@
+symbols:
+  SOXL:
+    asset_type: leveraged_etf
+    sector: Semiconductors
+    industry: Leveraged Semiconductor ETF
+    primary_benchmark: SOXX
+    secondary_benchmarks: [SMH]
+    peers: [SOXX, SMH, NVDA, AMD, MU]
+    leverage_multiple: 3
+    notes: Daily-reset leveraged ETF; evaluate path dependency and volatility drag.
+
+  MU:
+    asset_type: equity
+    sector: Semiconductors
+    industry: Memory
+    primary_benchmark: SOXX
+    secondary_benchmarks: [SMH]
+    peers: [WDC, NVDA, AMD]
+    leverage_multiple: 1
+
+  ARM:
+    asset_type: equity
+    sector: Semiconductors
+    industry: Semiconductor IP
+    primary_benchmark: SOXX
+    secondary_benchmarks: [SMH]
+    peers: [NVDA, AMD, QCOM]
+    leverage_multiple: 1
+
+  WDC:
+    asset_type: equity
+    sector: Technology Hardware
+    industry: Data Storage
+    primary_benchmark: XLK
+    secondary_benchmarks: [SOXX]
+    peers: [MU, STX]
+    leverage_multiple: 1
+
+  INTU:
+    asset_type: equity
+    sector: Software
+    industry: Financial Software
+    primary_benchmark: IGV
+    secondary_benchmarks: [XLK]
+    peers: [ADBE, CRM, ORCL]
+    leverage_multiple: 1
+
+  CRCL:
+    asset_type: equity
+    sector: Financial Technology
+    industry: Digital Assets and Payments
+    primary_benchmark: ARKF
+    secondary_benchmarks: [FINX]
+    peers: [COIN, HOOD]
+    leverage_multiple: 1
+

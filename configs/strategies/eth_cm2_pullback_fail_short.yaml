@@ -28,7 +28,7 @@ targets:
 
 stop_loss:
   mode: structure
-  price: 1625
+  price: 1605
   atr_buffer_multiplier: 0.2
 
 risk:

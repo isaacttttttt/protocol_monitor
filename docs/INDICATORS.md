@@ -96,6 +96,15 @@ Per-timeframe indicators:
 - volume profile method: candle volume is distributed across overlapped price bins; value area expands from POC until about 70% volume coverage
 - volume delta profile proxy: delta POC, positive-delta POC, negative-delta POC, net delta, dominant delta zones
 - confluence pack: price vs VWAP, price vs POC, ATR distance from POC, structure-flow alignment, AI attention flags
+- factor pack:
+  - EMA 8 / 20 / 50 / 200, alignment and normalized slopes
+  - annualized realized volatility and Parkinson high-low volatility
+  - short/medium range expansion, rolling drawdown and range location
+  - Kaufman-style efficiency ratio
+  - gap, dollar-volume, volume-trend and up-volume factors
+  - explicit data-readiness and proxy-quality fields
+- setup candidates: liquidity sweep, trend pullback, breakout/breakdown and volatility-transition evidence; these are observations only, not trade decisions
+- protocol candidate evidence for C-M1/C-M2/C-M3/C-M4 and C-W1/C-W2/C-W3/C-W4; unavailable OI history, ETH/BTC and BTC.D inputs are explicitly marked
 
 Unavailable or proxy-only crypto fields:
 
@@ -189,6 +198,11 @@ Equity context symbols:
 - `IWM`
 - `XLK`
 - `SMH`
+- `SOXX`
+- `DIA`
+- `^VIX`
+- `^TNX`
+- `DX-Y.NYB`
 
 Configured by `EQUITY_CONTEXT_SYMBOLS` in env, with `configs/system.yaml` as fallback.
 
@@ -198,6 +212,15 @@ Context indicators:
 - daily change percentage
 - daily indicator pack
 - 60m indicator pack
+- configuration-driven sector and industry classification
+- primary/secondary sector benchmarks and peer group
+- 5/20/60-bar relative return versus index and sector
+- 60-bar beta and correlation
+- peer breadth and median peer return
+- leveraged-ETF path-dependency/tracking-gap factors for SOXL-style products
+- protocol candidate evidence for M-E1/M-E2/M-E3/M-E4 and W-E1/W-E2/W-E3/W-E4
+
+The factor contract is deliberately split: code computes observations, comparisons and candidate conditions; the LLM produces final protocol scores, independent Micro/Macro judgments, conflicts and trade decisions.
 
 Unavailable or proxy-only equity fields:
 

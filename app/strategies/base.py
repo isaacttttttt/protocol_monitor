@@ -121,3 +121,19 @@ class BaseStrategy:
         )
         self.state.context["last_signal_id"] = signal.signal_id
         return signal
+
+    def _time_stop_if_due(self, price: Decimal, now: datetime) -> Signal | None:
+        if self.state.state not in {StrategyStateEnum.TRIGGERED, StrategyStateEnum.MANAGING}:
+            return None
+        elapsed_hours = (now - self.state.entered_state_at).total_seconds() / 3600
+        if elapsed_hours < self.max_hold_hours:
+            return None
+        self._set_state(StrategyStateEnum.EXPIRED, time_stop_hours=self.max_hold_hours)
+        return self._make_signal(
+            SignalLevel.L4,
+            price,
+            "EXPIRED",
+            f"Micro 信号已达到 {self.max_hold_hours}H 时间止损",
+            "未确认 TP1 的策略不得继续延长为 Macro 持仓",
+            risk_flags={"time_stop": True, "elapsed_hours": round(elapsed_hours, 2)},
+        )

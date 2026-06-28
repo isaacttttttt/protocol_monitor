@@ -20,10 +20,22 @@ from app.review.protocol_analysis import (
     _short_num,
     _yahoo_chart,
 )
+from app.review.equity_sectors import load_equity_sector_map, required_equity_context_symbols
 
 DEFAULT_CRYPTO_SYMBOLS = ["ETHUSDT", "BTCUSDT"]
-DEFAULT_EQUITY_SYMBOLS = ["CRCL", "WDC", "ARM", "INTU", "INFQ"]
-EQUITY_CONTEXT_SYMBOLS = ["SPY", "QQQ", "IWM", "XLK", "SMH"]
+DEFAULT_EQUITY_SYMBOLS = ["SOXL", "MU", "CRCL", "WDC", "ARM", "INTU", "INFQ"]
+EQUITY_CONTEXT_SYMBOLS = [
+    "SPY",
+    "QQQ",
+    "IWM",
+    "DIA",
+    "XLK",
+    "SMH",
+    "SOXX",
+    "^VIX",
+    "^TNX",
+    "DX-Y.NYB",
+]
 
 
 @dataclass(frozen=True)
@@ -44,12 +56,23 @@ def build_indicator_snapshot(system_config: dict[str, Any], settings: Settings |
     for symbol in crypto_symbols:
         snapshot["symbols"]["crypto"].append(_safe_build(lambda: _build_crypto_snapshot(str(symbol)), str(symbol), "crypto"))
 
-    equity_context = _build_equity_context(equity_context_symbols)
+    sector_map = load_equity_sector_map()
+    required_context = required_equity_context_symbols(equity_symbols, equity_context_symbols, sector_map)
+    equity_context = _build_equity_context(required_context)
     snapshot["contexts"]["equity"] = equity_context["context"]
     spy_daily = equity_context.get("spy_daily") or []
     for symbol in equity_symbols:
         snapshot["symbols"]["equity"].append(
-            _safe_build(lambda symbol=symbol: _build_equity_snapshot(str(symbol), spy_daily), str(symbol), "equity")
+            _safe_build(
+                lambda symbol=symbol: _build_equity_snapshot(
+                    str(symbol),
+                    spy_daily,
+                    sector_map.get(str(symbol).upper()),
+                    equity_context.get("daily_candles", {}),
+                ),
+                str(symbol),
+                "equity",
+            )
         )
 
     return _clean(snapshot)
@@ -74,11 +97,24 @@ def iter_indicator_snapshot_events(system_config: dict[str, Any], settings: Sett
         snapshot["symbols"]["crypto"].append(item)
         yield IndicatorSnapshotEvent(snapshot=snapshot, market="crypto", symbol=str(symbol), item=item)
 
-    equity_context = _build_equity_context(equity_context_symbols)
+    sector_map = load_equity_sector_map()
+    required_context = required_equity_context_symbols(equity_symbols, equity_context_symbols, sector_map)
+    equity_context = _build_equity_context(required_context)
     snapshot["contexts"]["equity"] = _clean(equity_context["context"])
     spy_daily = equity_context.get("spy_daily") or []
     for symbol in equity_symbols:
-        item = _clean(_safe_build(lambda symbol=symbol: _build_equity_snapshot(str(symbol), spy_daily), str(symbol), "equity"))
+        item = _clean(
+            _safe_build(
+                lambda symbol=symbol: _build_equity_snapshot(
+                    str(symbol),
+                    spy_daily,
+                    sector_map.get(str(symbol).upper()),
+                    equity_context.get("daily_candles", {}),
+                ),
+                str(symbol),
+                "equity",
+            )
+        )
         snapshot["symbols"]["equity"].append(item)
         yield IndicatorSnapshotEvent(snapshot=snapshot, market="equity", symbol=str(symbol), item=item)
 
@@ -102,6 +138,8 @@ def compact_symbol_snapshot_for_llm(
         monitor_window["recent_signals_for_symbol"] = [
             signal for signal in recent_signals if str(signal.get("symbol", "")).upper() == symbol.upper()
         ]
+    if market == "equity":
+        _filter_equity_context_for_target(compact, item)
     _drop_heavy_fields(compact)
     return _clean(compact)
 
@@ -112,6 +150,11 @@ def _snapshot_base(watchlist: dict[str, Any]) -> dict[str, Any]:
         "run_id": datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S") + "-" + uuid4().hex[:8],
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "mode": "indicator_snapshot_only",
+        "factor_contract": {
+            "code_role": "observations_factors_and_candidate_setups_only",
+            "llm_role": "final_protocol_scores_micro_macro_judgment_and_trade_decision",
+            "warning": "Candidate setup fields are evidence, not confirmed triggers.",
+        },
         "watchlist": watchlist,
         "indicator_quality": {
             "real_cvd": "full footprint CVD unavailable; Binance crypto uses taker buy/sell delta when available, other sources use OHLCV proxy",
@@ -269,17 +312,44 @@ def _drop_heavy_fields(value: Any) -> None:
             _drop_heavy_fields(item)
 
 
+def _filter_equity_context_for_target(snapshot: dict[str, Any], item: dict[str, Any]) -> None:
+    context = snapshot.get("contexts", {}).get("equity")
+    if not isinstance(context, dict):
+        return
+    classification = item.get("classification") or {}
+    keep = {
+        "SPY",
+        "QQQ",
+        "IWM",
+        "DIA",
+        "^VIX",
+        "^TNX",
+        "DX-Y.NYB",
+        str(classification.get("primary_benchmark") or "").upper(),
+        *[str(symbol).upper() for symbol in classification.get("secondary_benchmarks", [])],
+    }
+    snapshot["contexts"]["equity"] = {symbol: value for symbol, value in context.items() if symbol in keep}
+
+
 def _build_crypto_snapshot(symbol: str) -> dict[str, Any]:
     data = _load_crypto_market_data(symbol)
     timeframes = {
-        "5m": _indicator_pack(data.k5, "5m"),
-        "15m": _indicator_pack(data.k15, "15m"),
-        "4h": _indicator_pack(data.k4, "4h"),
-        "1d": _indicator_pack(data.k1d, "1d"),
+        "5m": _indicator_pack(data.k5, "5m", market="crypto"),
+        "15m": _indicator_pack(data.k15, "15m", market="crypto"),
+        "4h": _indicator_pack(data.k4, "4h", market="crypto"),
+        "1d": _indicator_pack(data.k1d, "1d", market="crypto"),
     }
     basis = None
     if data.mark_price is not None and data.last_price:
         basis = ((float(data.mark_price) / float(data.last_price)) - 1) * 100
+    derivatives = {
+        "mark_price": data.mark_price,
+        "funding_rate": data.funding_rate,
+        "funding_rate_pct": data.funding_rate * 100 if data.funding_rate is not None else None,
+        "open_interest": data.open_interest,
+        "open_interest_text": _short_num(float(data.open_interest)) if data.open_interest is not None else None,
+        "basis_pct": basis,
+    }
     return {
         "symbol": symbol,
         "market": "crypto",
@@ -292,15 +362,9 @@ def _build_crypto_snapshot(symbol: str) -> dict[str, Any]:
         "low_24h": data.low_24h,
         "updated_at": data.k15[-1]["time"],
         "updated_at_local": _format_data_time(data.k15[-1]["time"]),
-        "derivatives": {
-            "mark_price": data.mark_price,
-            "funding_rate": data.funding_rate,
-            "funding_rate_pct": data.funding_rate * 100 if data.funding_rate is not None else None,
-            "open_interest": data.open_interest,
-            "open_interest_text": _short_num(float(data.open_interest)) if data.open_interest is not None else None,
-            "basis_pct": basis,
-        },
+        "derivatives": derivatives,
         "timeframes": timeframes,
+        "protocol_setup_candidates": _crypto_protocol_candidates(timeframes, derivatives),
         "fallback_notes": list(data.fallback_notes),
         "unavailable": [
             "real_cvd",
@@ -311,7 +375,90 @@ def _build_crypto_snapshot(symbol: str) -> dict[str, Any]:
     }
 
 
-def _build_equity_snapshot(symbol: str, spy_daily: list[dict[str, Any]]) -> dict[str, Any]:
+def _crypto_protocol_candidates(
+    timeframes: dict[str, dict[str, Any]],
+    derivatives: dict[str, Any],
+) -> dict[str, Any]:
+    m15 = timeframes["15m"]
+    h4 = timeframes["4h"]
+    daily = timeframes["1d"]
+    return {
+        "contract": "Observed evidence for protocol matching. LLM must decide score, state, direction and trigger.",
+        "micro": {
+            "C-M1_lvn_expansion": {
+                "structure_15m": m15.get("structure"),
+                "structure_4h": h4.get("structure"),
+                "volume_profile_15m": m15.get("volume_profile"),
+                "flow_15m": _compact_flow_evidence(m15),
+                "volatility_transition_15m": m15.get("setup_candidates", {}).get("volatility_transition"),
+            },
+            "C-M2_pullback_or_retest_failure": {
+                "structure_4h": h4.get("structure"),
+                "price_vs_vwap_15m_pct": m15.get("confluence", {}).get("price_vs_vwap_pct"),
+                "price_vs_poc_15m_pct": m15.get("confluence", {}).get("price_vs_volume_poc_pct"),
+                "flow_divergence_15m": m15.get("flow", {}).get("delta_flow", {}).get("divergence"),
+            },
+            "C-M3_liquidity_sweep": {
+                "liquidity_15m": m15.get("liquidity"),
+                "absorption_15m": m15.get("flow", {}).get("delta_flow", {}).get("absorption"),
+                "liquidity_pools_15m": m15.get("smart_money", {}).get("liquidity_pools"),
+            },
+            "C-M4_funding_oi_squeeze": {
+                "funding_rate_pct": derivatives.get("funding_rate_pct"),
+                "open_interest": derivatives.get("open_interest"),
+                "basis_pct": derivatives.get("basis_pct"),
+                "oi_history_available": False,
+                "flow_15m": _compact_flow_evidence(m15),
+            },
+        },
+        "macro": {
+            "C-W1_btc_trend_follow": {
+                "daily_structure": daily.get("structure"),
+                "structure_4h": h4.get("structure"),
+                "daily_ema_alignment": daily.get("factors", {}).get("trend", {}).get("ema_alignment"),
+                "funding_rate_pct": derivatives.get("funding_rate_pct"),
+            },
+            "C-W2_alt_beta_rotation": {
+                "daily_structure": daily.get("structure"),
+                "eth_btc_data_available": False,
+                "btc_dominance_data_available": False,
+            },
+            "C-W3_daily_absorption_reversal": {
+                "daily_premium_discount": daily.get("smart_money", {}).get("premium_discount"),
+                "daily_flow_divergence": daily.get("flow", {}).get("delta_flow", {}).get("divergence"),
+                "daily_absorption": daily.get("flow", {}).get("delta_flow", {}).get("absorption"),
+                "structure_4h": h4.get("structure"),
+            },
+            "C-W4_macro_range": {
+                "daily_premium_discount": daily.get("smart_money", {}).get("premium_discount"),
+                "daily_liquidity_pools": daily.get("smart_money", {}).get("liquidity_pools"),
+                "daily_volume_profile": daily.get("volume_profile"),
+            },
+        },
+    }
+
+
+def _compact_flow_evidence(pack: dict[str, Any]) -> dict[str, Any]:
+    flow = pack.get("flow", {}).get("delta_flow", {})
+    last = flow.get("last", {})
+    return {
+        "quality": flow.get("quality"),
+        "cvd_trend": flow.get("cvd_trend"),
+        "cvd_slope_5": flow.get("cvd_slope_5"),
+        "cvd_slope_20": flow.get("cvd_slope_20"),
+        "delta_zscore20": flow.get("delta_zscore20"),
+        "stacked_delta": flow.get("stacked_delta"),
+        "last_hybrid_delta": last.get("hybrid_delta"),
+        "last_buy_ratio": last.get("buy_ratio"),
+    }
+
+
+def _build_equity_snapshot(
+    symbol: str,
+    spy_daily: list[dict[str, Any]],
+    sector_profile: dict[str, Any] | None = None,
+    context_daily: dict[str, list[dict[str, Any]]] | None = None,
+) -> dict[str, Any]:
     daily = _yahoo_chart(symbol, "1d", "1y")
     hourly = _yahoo_chart(symbol, "60m", "3mo")
     m15 = _yahoo_chart(symbol, "15m", "1mo")
@@ -327,6 +474,44 @@ def _build_equity_snapshot(symbol: str, spy_daily: list[dict[str, Any]]) -> dict
     change_pct = ((price / previous_daily["close"]) - 1) * 100 if previous_daily["close"] else None
     gap_pct = ((latest_intraday["open"] / previous_daily["close"]) - 1) * 100 if previous_daily["close"] else None
     rs_vs_spy = _relative_strength_vs_spy(daily, spy_daily, 20)
+    profile = sector_profile or {
+        "asset_type": "equity",
+        "sector": "Unclassified",
+        "industry": "Unclassified",
+        "primary_benchmark": "SPY",
+        "secondary_benchmarks": [],
+        "peers": [],
+        "leverage_multiple": 1,
+    }
+    available_context = context_daily or {}
+    benchmark_symbols = [
+        "SPY",
+        "QQQ",
+        str(profile.get("primary_benchmark") or "SPY").upper(),
+        *[str(item).upper() for item in profile.get("secondary_benchmarks", [])],
+        *[str(item).upper() for item in profile.get("peers", [])],
+    ]
+    benchmark_candles = {
+        benchmark: available_context[benchmark]
+        for benchmark in dict.fromkeys(benchmark_symbols)
+        if benchmark in available_context
+    }
+    relative_factors = _relative_market_factors(daily, benchmark_candles)
+    opening_range = _opening_range(m15)
+    timeframes = {
+        "15m": _indicator_pack(m15, "15m", market="equity"),
+        "60m": _indicator_pack(hourly, "60m", market="equity"),
+        "1d": _indicator_pack(daily, "1d", market="equity"),
+        "1wk": _indicator_pack(weekly, "1wk", market="equity"),
+    }
+    sector_context = {
+        "primary_benchmark": profile.get("primary_benchmark"),
+        "secondary_benchmarks": profile.get("secondary_benchmarks", []),
+        "peers": profile.get("peers", []),
+        "relative_factors": relative_factors,
+        "peer_breadth": _peer_breadth(available_context, profile.get("peers", [])),
+        "leveraged_etf_risk": _leveraged_etf_risk(daily, profile, available_context),
+    }
 
     return {
         "symbol": symbol,
@@ -339,14 +524,12 @@ def _build_equity_snapshot(symbol: str, spy_daily: list[dict[str, Any]]) -> dict
         "gap_pct": gap_pct,
         "updated_at": latest_intraday["time"],
         "updated_at_local": _format_data_time(latest_intraday["time"]),
-        "opening_range_30m": _opening_range(m15),
+        "opening_range_30m": opening_range,
         "relative_strength_vs_spy_20d_pct": rs_vs_spy,
-        "timeframes": {
-            "15m": _indicator_pack(m15, "15m"),
-            "60m": _indicator_pack(hourly, "60m"),
-            "1d": _indicator_pack(daily, "1d"),
-            "1wk": _indicator_pack(weekly, "1wk"),
-        },
+        "classification": profile,
+        "sector_context": sector_context,
+        "timeframes": timeframes,
+        "protocol_setup_candidates": _equity_protocol_candidates(price, opening_range, timeframes, sector_context),
         "unavailable": [
             "real_cvd",
             "options_flow",
@@ -359,22 +542,108 @@ def _build_equity_snapshot(symbol: str, spy_daily: list[dict[str, Any]]) -> dict
 def _build_equity_context(symbols: list[str]) -> dict[str, Any]:
     context: dict[str, Any] = {}
     spy_daily: list[dict[str, Any]] = []
+    daily_candles: dict[str, list[dict[str, Any]]] = {}
     for symbol in symbols:
         try:
             daily = _yahoo_chart(symbol, "1d", "1y")
             hourly = _yahoo_chart(symbol, "60m", "3mo")
             if symbol == "SPY":
                 spy_daily = daily
+            daily_candles[symbol] = daily
             context[symbol] = {
                 "status": "ok",
+                "context_role": _equity_context_role(symbol),
                 "price": daily[-1]["close"],
                 "change_pct": _return_pct(daily[-2]["close"], daily[-1]["close"]) if len(daily) > 1 else None,
-                "daily": _indicator_pack(daily, "1d", include_profile=False),
-                "60m": _indicator_pack(hourly, "60m", include_profile=False),
+                "daily": _indicator_pack(daily, "1d", include_profile=False, market="equity"),
+                "60m": _indicator_pack(hourly, "60m", include_profile=False, market="equity"),
             }
         except Exception as exc:
             context[symbol] = {"status": "error", "error": _brief_error(exc)}
-    return {"context": context, "spy_daily": spy_daily}
+    return {"context": context, "spy_daily": spy_daily, "daily_candles": daily_candles}
+
+
+def _equity_context_role(symbol: str) -> str:
+    if symbol in {"^VIX", "^TNX", "DX-Y.NYB"}:
+        return "external_regime_proxy"
+    if symbol in {"SPY", "QQQ", "IWM", "DIA"}:
+        return "index_regime"
+    return "sector_or_peer"
+
+
+def _equity_protocol_candidates(
+    price: float,
+    opening_range: dict[str, Any] | None,
+    timeframes: dict[str, dict[str, Any]],
+    sector_context: dict[str, Any],
+) -> dict[str, Any]:
+    m15 = timeframes["15m"]
+    hourly = timeframes["60m"]
+    daily = timeframes["1d"]
+    weekly = timeframes["1wk"]
+    primary = str(sector_context.get("primary_benchmark") or "")
+    primary_relative = (
+        sector_context.get("relative_factors", {}).get("benchmarks", {}).get(primary, {})
+    )
+    peer_breadth = sector_context.get("peer_breadth", {})
+    return {
+        "contract": "Observed evidence for protocol matching. LLM must decide score, state, direction and trigger.",
+        "micro": {
+            "M-E1_sector_rotation_trend": {
+                "target_15m_structure": m15.get("structure"),
+                "target_60m_structure": hourly.get("structure"),
+                "target_vs_sector_5_bar_pct": primary_relative.get("relative_return_5_pct"),
+                "peer_positive_ratio_20": peer_breadth.get("positive_ratio"),
+                "price_vs_vwap_pct": m15.get("confluence", {}).get("price_vs_vwap_pct"),
+            },
+            "M-E2_liquidity_sweep": {
+                "target_15m_liquidity": m15.get("liquidity"),
+                "target_15m_flow_divergence": m15.get("flow", {}).get("delta_flow", {}).get("divergence"),
+                "target_15m_absorption": m15.get("flow", {}).get("delta_flow", {}).get("absorption"),
+            },
+            "M-E3_opening_range_or_news": {
+                "opening_range_30m": opening_range,
+                "price": price,
+                "price_above_orh": bool(opening_range and price > float(opening_range["high"])),
+                "price_below_orl": bool(opening_range and price < float(opening_range["low"])),
+                "gap_pct": daily.get("factors", {}).get("price_volume", {}).get("gap_pct"),
+                "event_data_available": False,
+            },
+            "M-E4_breakdown_pullback_short": {
+                "daily_structure": daily.get("structure"),
+                "hourly_structure": hourly.get("structure"),
+                "target_15m_structure": m15.get("structure"),
+                "price_vs_vwap_pct": m15.get("confluence", {}).get("price_vs_vwap_pct"),
+            },
+        },
+        "macro": {
+            "W-E1_weekly_sector_trend": {
+                "weekly_structure": weekly.get("structure"),
+                "daily_structure": daily.get("structure"),
+                "weekly_ema_alignment": weekly.get("factors", {}).get("trend", {}).get("ema_alignment"),
+                "target_vs_sector_20_bar_pct": primary_relative.get("relative_return_20_pct"),
+                "peer_positive_ratio_20": peer_breadth.get("positive_ratio"),
+            },
+            "W-E2_event_revaluation": {
+                "weekly_structure": weekly.get("structure"),
+                "gap_pct": daily.get("factors", {}).get("price_volume", {}).get("gap_pct"),
+                "event_fundamental_data_available": False,
+            },
+            "W-E3_valuation_repair": {
+                "weekly_drawdown_pct": weekly.get("factors", {}).get("volatility", {}).get(
+                    "current_drawdown_from_60_bar_peak_pct"
+                ),
+                "daily_range_position_60": daily.get("factors", {}).get("price_volume", {}).get(
+                    "range_position_60"
+                ),
+                "daily_structure": daily.get("structure"),
+            },
+            "W-E4_defensive_rotation": {
+                "requires_index_and_external_context": ["SPY", "QQQ", "^VIX"],
+                "target_sector": primary,
+            },
+        },
+    }
 
 
 def _configured_symbols(env_value: str, yaml_value: Any, default: list[str]) -> tuple[list[str], str]:
@@ -415,7 +684,12 @@ def _normalize_symbol_list(value: Any) -> list[str]:
     return result
 
 
-def _indicator_pack(candles: list[dict[str, Any]], timeframe: str, include_profile: bool = True) -> dict[str, Any]:
+def _indicator_pack(
+    candles: list[dict[str, Any]],
+    timeframe: str,
+    include_profile: bool = True,
+    market: str = "unknown",
+) -> dict[str, Any]:
     if not candles:
         return {"timeframe": timeframe, "status": "empty"}
     state = _candle_state(candles)
@@ -464,12 +738,107 @@ def _indicator_pack(candles: list[dict[str, Any]], timeframe: str, include_profi
         },
         "liquidity": _liquidity_proxy(candles),
         "smart_money": smart_money,
+        "factors": _factor_pack(candles, timeframe, market),
     }
     if volume_profile is not None:
         pack["volume_profile"] = volume_profile
         pack["volume_delta_profile"] = _volume_delta_profile(candles)
     pack["confluence"] = _confluence_pack(candles, state, atr, vwap, volume_profile, delta_flow, smart_money)
+    pack["setup_candidates"] = _setup_candidates(candles, timeframe, state, atr, relative_volume, pack["factors"])
     return pack
+
+
+def _factor_pack(candles: list[dict[str, Any]], timeframe: str, market: str = "unknown") -> dict[str, Any]:
+    closes = [float(candle["close"]) for candle in candles]
+    highs = [float(candle["high"]) for candle in candles]
+    lows = [float(candle["low"]) for candle in candles]
+    volumes = [float(candle.get("volume") or 0.0) for candle in candles]
+    ema_8 = _ema_last(closes, 8)
+    ema_20 = _ema_last(closes, 20)
+    ema_50 = _ema_last(closes, 50)
+    ema_200 = _ema_last(closes, 200)
+    close = closes[-1]
+    returns = _log_returns(closes)
+    periods = _annualization_periods(timeframe, market)
+    realized_window = returns[-20:]
+    parkinson_window = list(zip(highs[-20:], lows[-20:]))
+    rolling_high_60 = max(highs[-60:])
+    rolling_low_60 = min(lows[-60:])
+    peak = max(closes[-60:])
+    return {
+        "trend": {
+            "ema_8": ema_8,
+            "ema_20": ema_20,
+            "ema_50": ema_50,
+            "ema_200": ema_200,
+            "ema_alignment": _ema_alignment(ema_8, ema_20, ema_50, ema_200),
+            "price_vs_ema_20_pct": _return_pct(ema_20, close) if ema_20 else None,
+            "price_vs_ema_50_pct": _return_pct(ema_50, close) if ema_50 else None,
+            "price_vs_ema_200_pct": _return_pct(ema_200, close) if ema_200 else None,
+            "ema_20_slope_5_pct": _ema_slope_pct(closes, 20, 5),
+            "ema_50_slope_10_pct": _ema_slope_pct(closes, 50, 10),
+        },
+        "volatility": {
+            "annualization_periods_assumed": periods,
+            "annualization_market": market,
+            "realized_volatility_20_annualized_pct": (
+                pstdev(realized_window) * math.sqrt(periods) * 100 if len(realized_window) >= 2 else None
+            ),
+            "parkinson_volatility_20_annualized_pct": _parkinson_volatility(parkinson_window, periods),
+            "range_expansion_ratio_5_to_20": _range_expansion_ratio(candles),
+            "current_drawdown_from_60_bar_peak_pct": _return_pct(peak, close),
+            "rolling_60_high": rolling_high_60,
+            "rolling_60_low": rolling_low_60,
+        },
+        "price_volume": {
+            "efficiency_ratio_20": _efficiency_ratio(closes, 20),
+            "range_position_20": _range_position(close, highs[-20:], lows[-20:]),
+            "range_position_60": _range_position(close, highs[-60:], lows[-60:]),
+            "gap_pct": _gap_pct(candles),
+            "dollar_volume_last": close * volumes[-1],
+            "dollar_volume_sma20": _sma([price * volume for price, volume in zip(closes, volumes)], 20),
+            "volume_trend_5_to_20": _safe_div(_sma(volumes, 5) or 0.0, _sma(volumes, 20) or 0.0),
+            "up_volume_ratio_20": _up_volume_ratio(candles[-20:]),
+        },
+        "data_quality": {
+            "bar_count": len(candles),
+            "ema_200_ready": len(candles) >= 200,
+            "volatility_20_ready": len(returns) >= 20,
+            "volume_nonzero_ratio": sum(1 for value in volumes if value > 0) / len(volumes),
+        },
+    }
+
+
+def _relative_market_factors(
+    target_candles: list[dict[str, Any]],
+    benchmark_candles: dict[str, list[dict[str, Any]]],
+) -> dict[str, Any]:
+    target_by_time = {str(candle["time"]): float(candle["close"]) for candle in target_candles}
+    benchmarks: dict[str, Any] = {}
+    for symbol, candles in benchmark_candles.items():
+        benchmark_by_time = {str(candle["time"]): float(candle["close"]) for candle in candles}
+        common = sorted(set(target_by_time) & set(benchmark_by_time))
+        if len(common) < 2:
+            size = min(len(target_candles), len(candles))
+            target_closes = [float(candle["close"]) for candle in target_candles[-size:]]
+            benchmark_closes = [float(candle["close"]) for candle in candles[-size:]]
+        else:
+            target_closes = [target_by_time[key] for key in common]
+            benchmark_closes = [benchmark_by_time[key] for key in common]
+        target_returns = _simple_returns(target_closes)
+        benchmark_returns = _simple_returns(benchmark_closes)
+        window = min(60, len(target_returns), len(benchmark_returns))
+        benchmarks[str(symbol).upper()] = {
+            "relative_return_5_pct": _relative_return(target_closes, benchmark_closes, 5),
+            "relative_return_20_pct": _relative_return(target_closes, benchmark_closes, 20),
+            "relative_return_60_pct": _relative_return(target_closes, benchmark_closes, 60),
+            "beta_60": _beta(target_returns[-window:], benchmark_returns[-window:]) if window >= 3 else None,
+            "correlation_60": (
+                _correlation(target_returns[-window:], benchmark_returns[-window:]) if window >= 3 else None
+            ),
+            "aligned_bar_count": min(len(target_closes), len(benchmark_closes)),
+        }
+    return {"benchmarks": benchmarks}
 
 
 def _last_bar(candle: dict[str, Any]) -> dict[str, Any]:
@@ -502,6 +871,190 @@ def _lookback_return(values: list[float], lookback: int) -> float | None:
     if len(values) <= lookback:
         return None
     return _return_pct(values[-lookback - 1], values[-1])
+
+
+def _ema_last(values: list[float], period: int) -> float | None:
+    if len(values) < period:
+        return None
+    alpha = 2 / (period + 1)
+    ema = sum(values[:period]) / period
+    for value in values[period:]:
+        ema = value * alpha + ema * (1 - alpha)
+    return ema
+
+
+def _ema_slope_pct(values: list[float], period: int, lookback: int) -> float | None:
+    if len(values) < period + lookback:
+        return None
+    current = _ema_last(values, period)
+    previous = _ema_last(values[:-lookback], period)
+    return _return_pct(previous, current) if previous and current is not None else None
+
+
+def _ema_alignment(*values: float | None) -> str:
+    available = [value for value in values if value is not None]
+    if len(available) < 3:
+        return "INSUFFICIENT_DATA"
+    if all(first > second for first, second in zip(available, available[1:])):
+        return "BULLISH"
+    if all(first < second for first, second in zip(available, available[1:])):
+        return "BEARISH"
+    return "MIXED"
+
+
+def _annualization_periods(timeframe: str, market: str) -> float:
+    if market == "crypto":
+        return {
+            "5m": 365 * 24 * 12,
+            "15m": 365 * 24 * 4,
+            "1h": 365 * 24,
+            "4h": 365 * 6,
+            "1d": 365,
+            "1wk": 52,
+        }.get(timeframe, 365)
+    return {
+        "5m": 252 * 78,
+        "15m": 252 * 26,
+        "60m": 252 * 6.5,
+        "1h": 252 * 6.5,
+        "4h": 252 * 1.625,
+        "1d": 252,
+        "1wk": 52,
+    }.get(timeframe, 252)
+
+
+def _log_returns(values: list[float]) -> list[float]:
+    return [math.log(current / previous) for previous, current in zip(values, values[1:]) if previous > 0 and current > 0]
+
+
+def _simple_returns(values: list[float]) -> list[float]:
+    return [(current / previous) - 1 for previous, current in zip(values, values[1:]) if previous]
+
+
+def _parkinson_volatility(high_low_pairs: list[tuple[float, float]], periods: float) -> float | None:
+    valid = [(high, low) for high, low in high_low_pairs if high > 0 and low > 0 and high >= low]
+    if len(valid) < 2:
+        return None
+    variance = sum(math.log(high / low) ** 2 for high, low in valid) / (4 * math.log(2) * len(valid))
+    return math.sqrt(max(0.0, variance) * periods) * 100
+
+
+def _range_expansion_ratio(candles: list[dict[str, Any]]) -> float | None:
+    ranges = [float(candle["high"]) - float(candle["low"]) for candle in candles]
+    return _safe_div(_sma(ranges, 5) or 0.0, _sma(ranges, 20) or 0.0)
+
+
+def _efficiency_ratio(values: list[float], period: int) -> float | None:
+    if len(values) <= period:
+        return None
+    window = values[-period - 1 :]
+    path = sum(abs(current - previous) for previous, current in zip(window, window[1:]))
+    return _safe_div(abs(window[-1] - window[0]), path)
+
+
+def _range_position(close: float, highs: list[float], lows: list[float]) -> float | None:
+    if not highs or not lows:
+        return None
+    return _safe_div(close - min(lows), max(highs) - min(lows))
+
+
+def _gap_pct(candles: list[dict[str, Any]]) -> float | None:
+    if len(candles) < 2:
+        return None
+    return _return_pct(float(candles[-2]["close"]), float(candles[-1]["open"]))
+
+
+def _up_volume_ratio(candles: list[dict[str, Any]]) -> float | None:
+    total = sum(float(candle.get("volume") or 0.0) for candle in candles)
+    up = sum(
+        float(candle.get("volume") or 0.0)
+        for candle in candles
+        if float(candle["close"]) > float(candle["open"])
+    )
+    return _safe_div(up, total)
+
+
+def _relative_return(target: list[float], benchmark: list[float], lookback: int) -> float | None:
+    size = min(len(target), len(benchmark))
+    if size <= lookback:
+        return None
+    target_return = _return_pct(target[-lookback - 1], target[-1])
+    benchmark_return = _return_pct(benchmark[-lookback - 1], benchmark[-1])
+    if target_return is None or benchmark_return is None:
+        return None
+    return target_return - benchmark_return
+
+
+def _beta(target_returns: list[float], benchmark_returns: list[float]) -> float | None:
+    size = min(len(target_returns), len(benchmark_returns))
+    if size < 3:
+        return None
+    target = target_returns[-size:]
+    benchmark = benchmark_returns[-size:]
+    target_mean = sum(target) / size
+    benchmark_mean = sum(benchmark) / size
+    covariance = sum((left - target_mean) * (right - benchmark_mean) for left, right in zip(target, benchmark)) / size
+    variance = sum((value - benchmark_mean) ** 2 for value in benchmark) / size
+    return _safe_div(covariance, variance)
+
+
+def _correlation(left_values: list[float], right_values: list[float]) -> float | None:
+    size = min(len(left_values), len(right_values))
+    if size < 3:
+        return None
+    left = left_values[-size:]
+    right = right_values[-size:]
+    left_mean = sum(left) / size
+    right_mean = sum(right) / size
+    covariance = sum((x - left_mean) * (y - right_mean) for x, y in zip(left, right)) / size
+    left_variance = sum((x - left_mean) ** 2 for x in left) / size
+    right_variance = sum((y - right_mean) ** 2 for y in right) / size
+    denominator = math.sqrt(left_variance * right_variance)
+    return _safe_div(covariance, denominator)
+
+
+def _setup_candidates(
+    candles: list[dict[str, Any]],
+    timeframe: str,
+    state: dict[str, Any],
+    atr: float,
+    relative_volume: float | None,
+    factors: dict[str, Any],
+) -> dict[str, Any]:
+    last = candles[-1]
+    close = float(last["close"])
+    liquidity = _liquidity_proxy(candles)
+    trend = factors["trend"]
+    price_volume = factors["price_volume"]
+    squeeze = _squeeze(candles)
+    return {
+        "contract": "Evidence only. These are candidate conditions, not trade triggers or recommendations.",
+        "timeframe": timeframe,
+        "liquidity_sweep": {
+            "swept_high": bool(liquidity.get("swept_recent_high_and_closed_back_inside")),
+            "swept_low": bool(liquidity.get("swept_recent_low_and_closed_back_inside")),
+            "lower_wick_ratio": liquidity.get("lower_wick_ratio"),
+            "upper_wick_ratio": liquidity.get("upper_wick_ratio"),
+        },
+        "trend_pullback": {
+            "ema_alignment": trend.get("ema_alignment"),
+            "distance_to_ema20_atr": (
+                _safe_div(close - float(trend["ema_20"]), atr) if trend.get("ema_20") is not None else None
+            ),
+            "efficiency_ratio_20": price_volume.get("efficiency_ratio_20"),
+        },
+        "breakout_or_breakdown": {
+            "bos_up": bool(state["structure"].get("bos_up")),
+            "bos_down": bool(state["structure"].get("bos_down")),
+            "relative_volume": relative_volume,
+            "range_position_20": price_volume.get("range_position_20"),
+        },
+        "volatility_transition": {
+            "squeeze_on": squeeze.get("squeeze_on"),
+            "squeeze_momentum": squeeze.get("momentum"),
+            "range_expansion_ratio_5_to_20": factors["volatility"].get("range_expansion_ratio_5_to_20"),
+        },
+    }
 
 
 def _rsi(closes: list[float], period: int = 14) -> float | None:
@@ -1334,6 +1887,56 @@ def _relative_strength_vs_spy(candles: list[dict[str, Any]], spy_daily: list[dic
     if symbol_return is None or spy_return is None:
         return None
     return symbol_return - spy_return
+
+
+def _peer_breadth(
+    context_daily: dict[str, list[dict[str, Any]]],
+    peers: list[str],
+    lookback: int = 20,
+) -> dict[str, Any]:
+    returns: dict[str, float | None] = {}
+    for peer in peers:
+        symbol = str(peer).upper()
+        candles = context_daily.get(symbol, [])
+        returns[symbol] = _lookback_return([float(candle["close"]) for candle in candles], lookback) if candles else None
+    available = [value for value in returns.values() if value is not None]
+    return {
+        "lookback_bars": lookback,
+        "peer_returns_pct": returns,
+        "available_count": len(available),
+        "positive_count": sum(1 for value in available if value > 0),
+        "positive_ratio": sum(1 for value in available if value > 0) / len(available) if available else None,
+        "median_return_pct": median(available) if available else None,
+    }
+
+
+def _leveraged_etf_risk(
+    target_daily: list[dict[str, Any]],
+    profile: dict[str, Any],
+    context_daily: dict[str, list[dict[str, Any]]],
+) -> dict[str, Any] | None:
+    leverage = float(profile.get("leverage_multiple") or 1)
+    if leverage <= 1:
+        return None
+    benchmark = str(profile.get("primary_benchmark") or "").upper()
+    benchmark_daily = context_daily.get(benchmark, [])
+    target_closes = [float(candle["close"]) for candle in target_daily]
+    benchmark_closes = [float(candle["close"]) for candle in benchmark_daily]
+    target_return = _lookback_return(target_closes, 20)
+    benchmark_return = _lookback_return(benchmark_closes, 20)
+    return {
+        "daily_reset": True,
+        "leverage_multiple": leverage,
+        "primary_benchmark": benchmark,
+        "path_dependency_warning": "Multi-day return can diverge from leverage_multiple × benchmark return.",
+        "target_return_20_pct": target_return,
+        "benchmark_return_20_pct": benchmark_return,
+        "leveraged_tracking_gap_20_pct": (
+            target_return - leverage * benchmark_return
+            if target_return is not None and benchmark_return is not None
+            else None
+        ),
+    }
 
 
 def _clean(value: Any) -> Any:

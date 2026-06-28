@@ -7,7 +7,11 @@ from app.config.settings import Settings
 from app.review import llm_protocol_report
 from app.review.indicator_snapshot import (
     IndicatorSnapshotEvent,
+    _crypto_protocol_candidates,
+    _equity_protocol_candidates,
+    _factor_pack,
     _indicator_pack,
+    _relative_market_factors,
     _volume_profile,
     compact_snapshot_for_llm,
     compact_symbol_snapshot_for_llm,
@@ -61,6 +65,81 @@ def test_indicator_pack_contains_protocol_metrics():
     assert "volume_delta_profile" in pack
     assert "confluence" in pack
     assert "ai_attention_flags" in pack["confluence"]
+    assert "factors" in pack
+    assert "trend" in pack["factors"]
+    assert "volatility" in pack["factors"]
+    assert "price_volume" in pack["factors"]
+    assert "setup_candidates" in pack
+
+
+def test_factor_pack_exposes_observations_without_final_trade_judgment():
+    factors = _factor_pack(_candles(220), "1d")
+
+    assert factors["trend"]["ema_20"] is not None
+    assert factors["trend"]["ema_50"] is not None
+    assert factors["trend"]["ema_200"] is not None
+    assert factors["trend"]["price_vs_ema_200_pct"] is not None
+    assert factors["volatility"]["realized_volatility_20_annualized_pct"] is not None
+    assert factors["volatility"]["parkinson_volatility_20_annualized_pct"] is not None
+    assert factors["price_volume"]["efficiency_ratio_20"] is not None
+    assert factors["price_volume"]["range_position_20"] is not None
+    assert "trade_decision" not in factors
+    assert "score" not in factors
+
+
+def test_relative_market_factors_compare_target_to_index_and_sector():
+    target = _candles(80)
+    spy = _candles(80)
+    sector = _candles(80)
+    for index, candle in enumerate(target):
+        candle["close"] *= 1 + index * 0.0005
+
+    factors = _relative_market_factors(target, {"SPY": spy, "SOXX": sector})
+
+    assert factors["benchmarks"]["SPY"]["relative_return_20_pct"] > 0
+    assert factors["benchmarks"]["SOXX"]["relative_return_20_pct"] > 0
+    assert factors["benchmarks"]["SPY"]["beta_60"] is not None
+    assert factors["benchmarks"]["SPY"]["correlation_60"] is not None
+
+
+def test_equity_protocol_candidates_are_evidence_not_final_judgment():
+    pack = _indicator_pack(_candles(220), "1d", market="equity")
+    candidates = _equity_protocol_candidates(
+        120.0,
+        {"high": 121.0, "low": 118.0},
+        {"15m": pack, "60m": pack, "1d": pack, "1wk": pack},
+        {
+            "primary_benchmark": "SOXX",
+            "relative_factors": {"benchmarks": {"SOXX": {"relative_return_5_pct": 1.2, "relative_return_20_pct": 3.4}}},
+            "peer_breadth": {"positive_ratio": 0.75},
+        },
+    )
+
+    assert "LLM must decide" in candidates["contract"]
+    assert "M-E1_sector_rotation_trend" in candidates["micro"]
+    assert "W-E1_weekly_sector_trend" in candidates["macro"]
+    assert "final_direction" not in candidates
+
+
+def test_crypto_protocol_candidates_cover_micro_and_macro_patterns():
+    pack = _indicator_pack(_candles(220), "15m", market="crypto")
+    candidates = _crypto_protocol_candidates(
+        {"15m": pack, "4h": pack, "1d": pack},
+        {"funding_rate_pct": 0.01, "open_interest": 1000, "basis_pct": 0.02},
+    )
+
+    assert set(candidates["micro"]) == {
+        "C-M1_lvn_expansion",
+        "C-M2_pullback_or_retest_failure",
+        "C-M3_liquidity_sweep",
+        "C-M4_funding_oi_squeeze",
+    }
+    assert set(candidates["macro"]) == {
+        "C-W1_btc_trend_follow",
+        "C-W2_alt_beta_rotation",
+        "C-W3_daily_absorption_reversal",
+        "C-W4_macro_range",
+    }
 
 
 def test_delta_flow_prefers_taker_buy_volume_when_available():
@@ -130,6 +209,37 @@ def test_compact_symbol_snapshot_for_llm_keeps_single_target_and_context():
     assert "BTCUSDT" in compact["contexts"]["crypto"]
     assert compact["monitor_window"]["recent_signals_for_symbol"] == [{"symbol": "ETHUSDT", "level": "L3"}]
     assert "bins" not in compact["symbols"]["crypto"][0]["timeframes"]["15m"]["volume_profile"]
+
+
+def test_compact_equity_snapshot_keeps_index_and_sector_context_but_not_full_peer_payload():
+    item = {
+        "symbol": "MU",
+        "market": "equity",
+        "status": "ok",
+        "classification": {
+            "primary_benchmark": "SOXX",
+            "secondary_benchmarks": ["SMH"],
+            "peers": ["WDC", "NVDA"],
+        },
+    }
+    snapshot = {
+        "contexts": {
+            "equity": {
+                "SPY": {"status": "ok"},
+                "QQQ": {"status": "ok"},
+                "SOXX": {"status": "ok"},
+                "SMH": {"status": "ok"},
+                "WDC": {"status": "ok"},
+                "NVDA": {"status": "ok"},
+            }
+        },
+        "symbols": {"crypto": [], "equity": [item]},
+    }
+
+    compact = compact_symbol_snapshot_for_llm(snapshot, "equity", item)
+
+    assert set(compact["contexts"]["equity"]) == {"SPY", "QQQ", "SOXX", "SMH"}
+    assert compact["symbols"]["equity"] == [item]
 
 
 def test_watchlist_env_overrides_yaml_symbols():

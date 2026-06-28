@@ -11,6 +11,9 @@ class EthStandAboveLevel(BaseStrategy):
             return []
         signals: list[Signal] = []
         price = context.event.close
+        expired = self._time_stop_if_due(price, context.now)
+        if expired:
+            return [expired]
         level = Decimal(str(self.config["levels"]["stand_above"]))
         support = Decimal(str(self.config["levels"]["support_low"]))
         fail = Decimal(str(self.config["levels"]["fail_back"]))

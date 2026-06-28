@@ -262,6 +262,32 @@ ATR、缺口、波动压缩、波动扩张、Panic Bar、日内 Range、Gap Size
 个股 / 直接竞争对手
 ```
 
+## 3.5 板块拆分与特殊产品
+
+每个美股标的必须明确拆分：
+
+```text
+指数环境 → 一级板块 ETF → 次级行业/主题 ETF → 同行广度 → 标的执行
+```
+
+SOXL 类日重置杠杆 ETF：
+
+```text
+1. 不得按普通个股分析，必须优先对账 SOXX 与 SMH。
+2. 必须输出实际波动、Beta/相关性、20 日跟踪偏差与路径依赖风险。
+3. SOXL 自身 15M/60M 只负责执行，Macro 方向必须得到半导体板块日线/周线支持。
+4. 板块不支持时，SOXL 多头仓位必须降级；高波动环境不得把 3x ETF 直接延长为普通 Macro 持仓。
+```
+
+MU 类半导体个股：
+
+```text
+1. 一级板块对账 SOXX/SMH。
+2. 次级行业按 Memory 处理，并检查 WDC 等同行广度。
+3. 个股强于板块但同行不扩散时，只能提高 Asset Execution，不得直接提高 Sector Score。
+4. 板块、同行和个股结构三者一致时，才允许标准 Macro 趋势判断。
+```
+
 ---
 
 # 4. Micro Strategy 评分
@@ -689,6 +715,9 @@ T+2 未到 TP1：退出或降仓。
 6. 缺少 Flow/CVD/OBV/成交量依据时，Flow 不得给满分。
 7. 胜率必须是条件概率区间，不得输出确定性预测。
 8. TP1 R/R < 1.5R 时，必须禁止开仓或降级观察。
+9. 代码输出的 factors、relative_factors、setup_candidates 与 protocol_setup_candidates 都只是证据，不是最终评分或触发。
+10. 最终 Micro/Macro Score、状态、方向、条件胜率与交易指令必须由模型结合完整协议判断。
+11. SOXL 必须使用杠杆 ETF 规则；MU 必须使用半导体板块与 Memory 同行规则。
 ```
 
 ---

@@ -1,5 +1,6 @@
 from app.config.settings import Settings
 from app.llm.openai_compatible import OpenAICompatibleClient
+from app.review.llm_protocol_report import _symbol_messages
 
 
 def test_selected_llm_config_uses_yaml_payload_without_thinking(tmp_path):
@@ -93,3 +94,23 @@ def test_llm_config_allowed_params_filters_unknown_values(tmp_path):
     )
 
     assert client._payload([]) == {"model": "custom-model", "messages": [], "max_tokens": 1000}
+
+
+def test_symbol_prompt_assigns_final_judgment_to_llm_and_separates_books():
+    messages = _symbol_messages(
+        1,
+        "MU",
+        "equity",
+        {
+            "mode": "single_symbol_protocol_analysis",
+            "factor_contract": {"code_role": "observations_only", "llm_role": "final_judgment"},
+            "symbols": {"equity": [{"symbol": "MU"}], "crypto": []},
+        },
+        "protocol",
+    )
+
+    prompt = messages[1]["content"]
+    assert "Micro 结论" in prompt
+    assert "Macro 结论" in prompt
+    assert "最终评分与交易判断由你完成" in prompt
+    assert "不得把候选形态当成已触发" in prompt

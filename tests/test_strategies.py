@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta
+
 import pytest
 
 from app.market.kline_store import KlineStore
@@ -6,6 +8,7 @@ from app.strategies.base import StrategyContext
 from app.strategies.eth_cm2_pullback_fail_short import EthCm2PullbackFailShort
 from app.strategies.eth_cm3_liquidity_sweep_long import EthCm3LiquiditySweepLong
 from app.strategies.eth_stand_above_level import EthStandAboveLevel
+from app.strategies.state_machine import StrategyStateEnum
 
 from conftest import DummyRepo
 
@@ -94,3 +97,27 @@ async def test_eth_cm3_liquidity_sweep_l3(store, kline_factory):
     await strategy.on_market_update(await push(store, kline_factory("ETHUSDT", "5m", 1550, 1552, 1530, 1545)))
     signals = await strategy.on_market_update(await push(store, kline_factory("ETHUSDT", "15m", 1545, 1580, 1540, 1575)))
     assert any(signal.level == SignalLevel.L3 for signal in signals)
+
+
+@pytest.mark.asyncio
+async def test_triggered_micro_strategy_expires_after_configured_time_stop(store, kline_factory):
+    config = {
+        "id": "ETH_STAND_ABOVE_1605_V1",
+        "exchange": "BINANCE",
+        "symbol": "ETHUSDT",
+        "book": "Micro",
+        "strategy_name": "ETH Stand Above 1605",
+        "direction": "NEUTRAL",
+        "max_hold_hours": 48,
+        "levels": {"stand_above": 1605, "support_low": 1600, "fail_back": 1583},
+    }
+    strategy = EthStandAboveLevel(config)
+    strategy.state.state = StrategyStateEnum.TRIGGERED
+    strategy.state.entered_state_at = datetime(2026, 1, 1)
+    event = kline_factory("ETHUSDT", "15m", 1600, 1610, 1590, 1608)
+    context = StrategyContext(event=event, store=store, now=datetime(2026, 1, 3))
+
+    signals = await strategy.on_market_update(context)
+
+    assert signals[0].status == "EXPIRED"
+    assert signals[0].risk_flags["time_stop"] is True

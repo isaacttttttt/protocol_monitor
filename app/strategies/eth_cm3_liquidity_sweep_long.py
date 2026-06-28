@@ -1,6 +1,8 @@
 from decimal import Decimal
 
+from app.indicators.atr import calculate_atr
 from app.risk.rr import calc_rr
+from app.risk.stops import atr_buffered_stop
 from app.signals.models import Signal, SignalLevel
 from app.strategies.base import BaseStrategy, StrategyContext
 from app.strategies.state_machine import StrategyStateEnum
@@ -12,8 +14,21 @@ class EthCm3LiquiditySweepLong(BaseStrategy):
             return []
         signals: list[Signal] = []
         price = context.event.close
-        sweep_level = Decimal(str(self.config["levels"]["sweep_level_1"]))
-        reclaim = Decimal(str(self.config["levels"]["reclaim_level_1"]))
+        expired = self._time_stop_if_due(price, context.now)
+        if expired:
+            return [expired]
+        sweep_levels = [
+            Decimal(str(value))
+            for key, value in self.config["levels"].items()
+            if key.startswith("sweep_level_")
+        ]
+        reclaim_levels = [
+            Decimal(str(value))
+            for key, value in self.config["levels"].items()
+            if key.startswith("reclaim_level_")
+        ]
+        sweep_level = max(sweep_levels)
+        reclaim = min(reclaim_levels)
         tp1 = Decimal(str(self.config["targets"]["tp1"]))
         tp2 = Decimal(str(self.config["targets"]["tp2"]))
         tp3 = Decimal(str(self.config["targets"]["tp3"]))
@@ -33,11 +48,22 @@ class EthCm3LiquiditySweepLong(BaseStrategy):
             self._set_state(StrategyStateEnum.INVALID)
             return [self._make_signal(SignalLevel.L4, price, "INVALID", "BTC strong bearish，ETH 逆势短多失效", "暂停 C-M3 多头", btc_filter=btc, flow_state=cvd)]
         if sweep_low and context.event.interval == "15m" and price > reclaim and not cvd.makes_new_low and not btc.strong_bearish:
-            stop = sweep_low
+            stop_config = self.config.get("stop_loss", {})
+            atr = calculate_atr(context.store.get_recent(self.exchange, self.symbol, "15m", 100))
+            stop = Decimal(
+                str(
+                    atr_buffered_stop(
+                        "LONG",
+                        float(sweep_low),
+                        atr,
+                        float(stop_config.get("atr_buffer_multiplier", 0.0)),
+                    )
+                )
+            )
             rr = calc_rr("LONG", float(price), float(stop), float(tp1))
             if rr >= min_rr:
                 self._set_state(StrategyStateEnum.TRIGGERED)
-                signals.append(self._make_signal(SignalLevel.L3, price, "TRIGGERED", "刺破 1544 后 15M 收盘站回 1570，CVD 未创新低，BTC 未强空，R/R 合格", "15M 收盘低于 sweep low 或 BTC strong bearish；不得升级 Macro", entry=price, sl=stop, tp1=tp1, tp2=tp2, tp3=tp3, rr_to_tp1=round(rr, 2), position_r=min(float(self.config.get("risk", {}).get("default_position_r", 0.25)), 0.5), btc_filter=btc, flow_state=cvd))
+                signals.append(self._make_signal(SignalLevel.L3, price, "TRIGGERED", f"刺破 {sweep_level} 后 15M 收盘站回 {reclaim}，CVD 未创新低，BTC 未强空，R/R 合格", "15M 收盘低于 sweep low 或 BTC strong bearish；不得升级 Macro", entry=price, sl=stop, tp1=tp1, tp2=tp2, tp3=tp3, rr_to_tp1=round(rr, 2), position_r=min(float(self.config.get("risk", {}).get("default_position_r", 0.25)), 0.5), btc_filter=btc, flow_state=cvd, raw_snapshot={"configured_sweep_levels": [float(value) for value in sweep_levels], "configured_reclaim_levels": [float(value) for value in reclaim_levels], "atr14": atr, "atr_buffer_multiplier": float(stop_config.get("atr_buffer_multiplier", 0.0))}))
             else:
                 signals.append(self._make_signal(SignalLevel.L2, price, "WATCHING", f"扫低反杀接近触发但 R/R={rr:.2f} < {min_rr}，禁止 L3", "等待更好入场或放弃", btc_filter=btc, flow_state=cvd, risk_flags={"rr_too_low": True}))
         return signals

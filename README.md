@@ -52,8 +52,8 @@ BINANCE_REST_BASE=https://fapi.binance.com
 OKX_REST_BASE=https://www.okx.com
 YAHOO_CHART_BASE=https://query1.finance.yahoo.com/v8/finance/chart
 WATCHLIST_CRYPTO_SYMBOLS=ETHUSDT,BTCUSDT
-WATCHLIST_EQUITY_SYMBOLS=CRCL,WDC,ARM,INTU,INFQ
-EQUITY_CONTEXT_SYMBOLS=SPY,QQQ,IWM,XLK,SMH
+WATCHLIST_EQUITY_SYMBOLS=SOXL,MU,CRCL,WDC,ARM,INTU,INFQ
+EQUITY_CONTEXT_SYMBOLS=SPY,QQQ,IWM,DIA,XLK,SMH,SOXX,^VIX,^TNX,DX-Y.NYB
 LLM_CONFIG=fineres
 LLM_CONFIG_DIR=configs/llms
 LLM_API_KEY=
@@ -152,7 +152,9 @@ Current strategies:
 - `eth_stand_above_1605.yaml`
 - `eth_cm3_liquidity_sweep_long.yaml`
 
-Important: C-M2 keeps the document's default stop at `1625`, so live L3 triggering still obeys the R/R filter. If `TP1 R/R < 1.5`, the system downgrades to L2 instead of pushing L3.
+Important: C-M2 uses the active pressure-zone invalidation plus the configured ATR buffer. Live L3 still obeys the R/R filter; if `TP1 R/R < 1.5`, the system downgrades to L2.
+
+US-equity sector metadata lives in `configs/equity_sectors.yaml`. SOXL is evaluated as a daily-reset 3x semiconductor ETF against SOXX/SMH; MU is evaluated as a semiconductor memory stock against SOXX/SMH plus configured peers. Python supplies factors and candidate setups only—the LLM owns final Micro/Macro scoring and judgment.
 
 ## Add A Strategy
 
@@ -193,8 +195,8 @@ automation:
 report:
   use_llm_analysis: true
   crypto_symbols: ["ETHUSDT", "BTCUSDT"]
-  equity_symbols: ["CRCL", "WDC", "ARM", "INTU", "INFQ"]
-  equity_context_symbols: ["SPY", "QQQ", "IWM", "XLK", "SMH"]
+  equity_symbols: ["SOXL", "MU", "CRCL", "WDC", "ARM", "INTU", "INFQ"]
+  equity_context_symbols: ["SPY", "QQQ", "IWM", "DIA", "XLK", "SMH", "SOXX", "^VIX", "^TNX", "DX-Y.NYB"]
 ```
 
 On Railway, prefer changing `WATCHLIST_CRYPTO_SYMBOLS` and `WATCHLIST_EQUITY_SYMBOLS` in Variables instead of editing this YAML.
