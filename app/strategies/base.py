@@ -75,16 +75,45 @@ class BaseStrategy:
         self.state.state = state
         self.state.context.update(context)
 
+    def _entry_locked(self, now: datetime, cooldown_hours: int = 4) -> bool:
+        """Prevent duplicate entries and briefly hold terminal strategy states."""
+        if self.state.state in {StrategyStateEnum.TRIGGERED, StrategyStateEnum.MANAGING}:
+            return True
+        if self.state.state not in {StrategyStateEnum.INVALID, StrategyStateEnum.EXPIRED, StrategyStateEnum.COOLDOWN}:
+            return False
+        elapsed = (now - self.state.entered_state_at).total_seconds() / 3600
+        if elapsed < cooldown_hours:
+            return True
+        self.state = StrategyState()
+        return False
+
+    def on_signal_resolved(self, signal_id: str, resolved_at: datetime) -> None:
+        """Move the matching live strategy into a short re-entry cooldown."""
+        if self.state.context.get("last_signal_id") != signal_id:
+            return
+        self.state = StrategyState(
+            state=StrategyStateEnum.COOLDOWN,
+            context={"resolved_signal_id": signal_id},
+            entered_state_at=resolved_at,
+        )
+
     def _btc_filter(self, store: KlineStore) -> BtcFilterState:
-        candles = store.get_recent(self.exchange, "BTCUSDT", "15m", 60)
+        candles = self._closed_recent(store, "BTCUSDT", "15m", 60)
         return evaluate_btc_filter(candles, calculate_macd(candles), calculate_cvd_proxy(candles), detect_structure(candles))
 
     def _cvd(self, store: KlineStore, interval: str, lookback: int = 20):
-        return calculate_cvd_proxy(store.get_recent(self.exchange, self.symbol, interval, lookback + 5), lookback=lookback)
+        return calculate_cvd_proxy(
+            self._closed_recent(store, self.symbol, interval, lookback + 5),
+            lookback=lookback,
+        )
 
     def _last_close(self, store: KlineStore, interval: str) -> Decimal | None:
-        candles = store.get_recent(self.exchange, self.symbol, interval, 1)
+        candles = self._closed_recent(store, self.symbol, interval, 1)
         return candles[-1].close if candles else None
+
+    def _closed_recent(self, store: KlineStore, symbol: str, interval: str, limit: int) -> list[Kline]:
+        candles = store.get_recent(self.exchange, symbol, interval, limit * 2)
+        return [candle for candle in candles if candle.is_closed][-limit:]
 
     def _make_signal(
         self,

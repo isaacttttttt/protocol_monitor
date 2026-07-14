@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import delete, desc, func, insert, select
+from sqlalchemy import delete, desc, func, insert, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -31,6 +31,7 @@ class KlineRepository:
             "close": kline.close,
             "volume": kline.volume,
             "quote_volume": kline.quote_volume,
+            "taker_buy_volume": kline.taker_buy_volume,
             "is_closed": kline.is_closed,
         }
         async with self.session_factory() as session:
@@ -78,6 +79,7 @@ class KlineRepository:
                 volume=row["volume"],
                 quote_volume=row["quote_volume"],
                 is_closed=row["is_closed"],
+                taker_buy_volume=row["taker_buy_volume"],
             )
             for row in reversed(items)
         ]
@@ -134,6 +136,75 @@ class SignalRepository:
             ).mappings()
             return [dict(row) for row in rows]
 
+    async def get_manageable_signals(self, exchange: str | None = None, symbol: str | None = None) -> list[dict]:
+        """Return triggered paper trades that still require lifecycle updates."""
+        conditions = [
+            signals.c.status.in_(["TRIGGERED", "MANAGING"]),
+            signals.c.entry.is_not(None),
+            signals.c.sl.is_not(None),
+        ]
+        if exchange is not None:
+            conditions.append(signals.c.exchange == exchange)
+        if symbol is not None:
+            conditions.append(signals.c.symbol == symbol)
+        async with self.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(signals).where(*conditions)
+                )
+            ).mappings()
+            return [dict(row) for row in rows]
+
+    async def update_signal_lifecycle(self, signal_id: str, **values: object) -> None:
+        """Persist a paper-trade state transition."""
+        if not values:
+            return
+        async with self.session_factory() as session:
+            await session.execute(update(signals).where(signals.c.signal_id == signal_id).values(**values))
+            await session.commit()
+
+    async def get_portfolio_risk_state(
+        self,
+        now: datetime | None = None,
+        risk_per_1r_pct: float = 1.0,
+    ) -> dict[str, float | int]:
+        """Reconstruct paper-equity drawdown and recent loss state from outcomes."""
+        current_time = now or datetime.utcnow()
+        day_start = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
+        async with self.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(signals)
+                    .where(signals.c.result.is_not(None))
+                    .order_by(signals.c.resolved_at, signals.c.created_at)
+                )
+            ).mappings()
+            items = [dict(row) for row in rows]
+        equity = peak = 1.0
+        drawdown = 0.0
+        daily_r = 0.0
+        consecutive_losses = 0
+        for item in items:
+            result_r = _paper_result_r(item)
+            if result_r is None:
+                continue
+            resolved_at = item.get("resolved_at") or item.get("created_at")
+            if resolved_at and resolved_at >= day_start:
+                daily_r += result_r * float(item.get("position_r") or 0.0)
+            pnl_fraction = result_r * float(item.get("position_r") or 0.0) * risk_per_1r_pct / 100
+            equity *= 1 + pnl_fraction
+            peak = max(peak, equity)
+            drawdown = max(drawdown, (peak - equity) / peak if peak else 0.0)
+            if result_r < 0:
+                consecutive_losses += 1
+            elif result_r > 0:
+                consecutive_losses = 0
+        return {
+            "daily_realized_r": daily_r,
+            "current_drawdown_pct": drawdown * 100,
+            "consecutive_losses": consecutive_losses,
+        }
+
     async def save_strategy_state(self, values: dict) -> None:
         async with self.session_factory() as session:
             await session.execute(delete(strategy_states).where(strategy_states.c.strategy_id == values["strategy_id"]))
@@ -167,6 +238,23 @@ class IndicatorRepository:
             )
             await session.execute(insert(indicators).values(**values))
             await session.commit()
+
+
+def _paper_result_r(row: dict) -> float | None:
+    result = str(row.get("result") or "")
+    if result == "LOSS_SL":
+        return -1.0
+    if result in {"BREAKEVEN_AFTER_TP1", "TIME_STOP", "TP1_REACHED"}:
+        return 0.0
+    if result != "WIN_TP2":
+        return None
+    entry = float(row.get("entry") or 0.0)
+    stop = float(row.get("sl") or 0.0)
+    target = float(row.get("tp2") or row.get("tp1") or 0.0)
+    direction = str(row.get("direction") or "")
+    risk = entry - stop if direction == "LONG" else stop - entry
+    reward = target - entry if direction == "LONG" else entry - target
+    return reward / risk if risk > 0 else None
 
 
 class IndicatorArchiveRepository:

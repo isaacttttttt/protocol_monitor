@@ -14,6 +14,8 @@ class EthStandAboveLevel(BaseStrategy):
         expired = self._time_stop_if_due(price, context.now)
         if expired:
             return [expired]
+        if self._entry_locked(context.now):
+            return []
         level = Decimal(str(self.config["levels"]["stand_above"]))
         support = Decimal(str(self.config["levels"]["support_low"]))
         fail = Decimal(str(self.config["levels"]["fail_back"]))
@@ -28,8 +30,8 @@ class EthStandAboveLevel(BaseStrategy):
 
         self._set_state(StrategyStateEnum.WATCHING)
         signals.append(self._make_signal(SignalLevel.L2, price, "WATCHING", "15M 收盘站上 1605", "5M 收盘跌回 1583", flow_state=cvd))
-        lows = [c.low for c in context.store.get_recent(self.exchange, self.symbol, "5m", 2)]
-        last_six = context.store.get_recent(self.exchange, self.symbol, "5m", 6)
+        lows = [c.low for c in self._closed_recent(context.store, self.symbol, "5m", 2)]
+        last_six = self._closed_recent(context.store, self.symbol, "5m", 6)
         no_fail_30m = all(c.close >= fail for c in last_six)
         if len(lows) == 2 and min(lows) >= support and no_fail_30m and cvd.delta > 0:
             self._set_state(StrategyStateEnum.TRIGGERED)

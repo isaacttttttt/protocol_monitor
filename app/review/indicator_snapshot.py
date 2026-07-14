@@ -9,18 +9,21 @@ from pathlib import Path
 from statistics import median, pstdev
 from typing import Any, Iterator
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from app.config.settings import Settings
 from app.review.protocol_analysis import (
     _aggregate_candles,
     _brief_error,
     _candle_state,
+    _closed_yahoo_candles,
     _format_data_time,
     _load_crypto_market_data,
     _short_num,
     _yahoo_chart,
 )
 from app.review.equity_sectors import load_equity_sector_map, required_equity_context_symbols
+from app.strategies.equity_orb_retest import OrbRetestConfig, evaluate_orb_retest
 
 DEFAULT_CRYPTO_SYMBOLS = ["ETHUSDT", "BTCUSDT"]
 DEFAULT_EQUITY_SYMBOLS = ["SOXL", "MU", "CRCL", "WDC", "ARM", "INTU", "INFQ"]
@@ -36,6 +39,7 @@ EQUITY_CONTEXT_SYMBOLS = [
     "^TNX",
     "DX-Y.NYB",
 ]
+NEW_YORK_TZ = ZoneInfo("America/New_York")
 
 
 @dataclass(frozen=True)
@@ -69,6 +73,7 @@ def build_indicator_snapshot(system_config: dict[str, Any], settings: Settings |
                     spy_daily,
                     sector_map.get(str(symbol).upper()),
                     equity_context.get("daily_candles", {}),
+                    system_config.get("report", {}).get("orb_retest", {}),
                 ),
                 str(symbol),
                 "equity",
@@ -110,6 +115,7 @@ def iter_indicator_snapshot_events(system_config: dict[str, Any], settings: Sett
                     spy_daily,
                     sector_map.get(str(symbol).upper()),
                     equity_context.get("daily_candles", {}),
+                    system_config.get("report", {}).get("orb_retest", {}),
                 ),
                 str(symbol),
                 "equity",
@@ -458,21 +464,27 @@ def _build_equity_snapshot(
     spy_daily: list[dict[str, Any]],
     sector_profile: dict[str, Any] | None = None,
     context_daily: dict[str, list[dict[str, Any]]] | None = None,
+    orb_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     daily = _yahoo_chart(symbol, "1d", "1y")
     hourly = _yahoo_chart(symbol, "60m", "3mo")
-    m15 = _yahoo_chart(symbol, "15m", "1mo")
+    m15_rows = _yahoo_chart(symbol, "15m", "1mo", include_prepost=True, closed_only=False)
+    m15 = _closed_yahoo_candles(m15_rows, "15m")
+    if not m15:
+        raise ValueError(f"no closed Yahoo chart data for {symbol} 15m")
     try:
         weekly = _yahoo_chart(symbol, "1wk", "5y")
     except Exception:
         weekly = _aggregate_candles(daily, 5)
 
-    latest_intraday = m15[-1]
+    latest_intraday = m15_rows[-1]
     last_daily = daily[-1]
-    previous_daily = daily[-2] if len(daily) > 1 else last_daily
+    session_date = _latest_local_date(m15_rows)
+    previous_close = _previous_daily_close(daily, session_date)
     price = float(latest_intraday["close"])
-    change_pct = ((price / previous_daily["close"]) - 1) * 100 if previous_daily["close"] else None
-    gap_pct = ((latest_intraday["open"] / previous_daily["close"]) - 1) * 100 if previous_daily["close"] else None
+    change_pct = ((price / previous_close) - 1) * 100 if previous_close else None
+    session_open = _regular_session_open(m15, session_date)
+    gap_pct = ((session_open / previous_close) - 1) * 100 if session_open is not None and previous_close else None
     rs_vs_spy = _relative_strength_vs_spy(daily, spy_daily, 20)
     profile = sector_profile or {
         "asset_type": "equity",
@@ -498,6 +510,8 @@ def _build_equity_snapshot(
     }
     relative_factors = _relative_market_factors(daily, benchmark_candles)
     opening_range = _opening_range(m15)
+    premarket = _premarket_summary(m15)
+    session_vwap = _session_vwap(m15, session_date)
     timeframes = {
         "15m": _indicator_pack(m15, "15m", market="equity"),
         "60m": _indicator_pack(hourly, "60m", market="equity"),
@@ -512,6 +526,16 @@ def _build_equity_snapshot(
         "peer_breadth": _peer_breadth(available_context, profile.get("peers", [])),
         "leveraged_etf_risk": _leveraged_etf_risk(daily, profile, available_context),
     }
+    primary_relative = relative_factors.get("benchmarks", {}).get(
+        str(profile.get("primary_benchmark") or ""),
+        {},
+    )
+    deterministic_orb = evaluate_orb_retest(
+        m15,
+        previous_close,
+        sector_relative_5_pct=primary_relative.get("relative_return_5_pct"),
+        config=OrbRetestConfig(**(orb_config or {})),
+    )
 
     return {
         "symbol": symbol,
@@ -522,6 +546,10 @@ def _build_equity_snapshot(
         "change_pct": change_pct,
         "last_daily_close": last_daily["close"],
         "gap_pct": gap_pct,
+        "regular_session_open": session_open,
+        "premarket": premarket,
+        "regular_session_vwap": session_vwap,
+        "deterministic_orb_retest": deterministic_orb,
         "updated_at": latest_intraday["time"],
         "updated_at_local": _format_data_time(latest_intraday["time"]),
         "opening_range_30m": opening_range,
@@ -529,7 +557,14 @@ def _build_equity_snapshot(
         "classification": profile,
         "sector_context": sector_context,
         "timeframes": timeframes,
-        "protocol_setup_candidates": _equity_protocol_candidates(price, opening_range, timeframes, sector_context),
+        "protocol_setup_candidates": _equity_protocol_candidates(
+            price,
+            opening_range,
+            timeframes,
+            sector_context,
+            premarket=premarket,
+            session_vwap=session_vwap,
+        ),
         "unavailable": [
             "real_cvd",
             "options_flow",
@@ -576,6 +611,9 @@ def _equity_protocol_candidates(
     opening_range: dict[str, Any] | None,
     timeframes: dict[str, dict[str, Any]],
     sector_context: dict[str, Any],
+    *,
+    premarket: dict[str, Any] | None = None,
+    session_vwap: float | None = None,
 ) -> dict[str, Any]:
     m15 = timeframes["15m"]
     hourly = timeframes["60m"]
@@ -603,9 +641,18 @@ def _equity_protocol_candidates(
             },
             "M-E3_opening_range_or_news": {
                 "opening_range_30m": opening_range,
+                "opening_range_complete": bool(opening_range and opening_range.get("complete")),
+                "premarket": premarket,
+                "session_vwap": session_vwap,
                 "price": price,
-                "price_above_orh": bool(opening_range and price > float(opening_range["high"])),
-                "price_below_orl": bool(opening_range and price < float(opening_range["low"])),
+                "price_above_orh": bool(
+                    opening_range and opening_range.get("complete") and price > float(opening_range["high"])
+                ),
+                "price_below_orl": bool(
+                    opening_range and opening_range.get("complete") and price < float(opening_range["low"])
+                ),
+                "price_above_session_vwap": bool(session_vwap is not None and price > session_vwap),
+                "price_below_session_vwap": bool(session_vwap is not None and price < session_vwap),
                 "gap_pct": daily.get("factors", {}).get("price_volume", {}).get("gap_pct"),
                 "event_data_available": False,
             },
@@ -1305,15 +1352,16 @@ def _smart_money_pack(candles: list[dict[str, Any]], atr: float) -> dict[str, An
 
 
 def _displacement_pack(candles: list[dict[str, Any]], lookback: int = 40) -> dict[str, Any]:
-    window = candles[-lookback:] if len(candles) > lookback else candles
-    if not window:
+    if not candles:
         return {"status": "empty"}
-    ranges = [max(float(candle["high"]) - float(candle["low"]), 1e-12) for candle in window]
-    volumes = [float(candle.get("volume") or 0.0) for candle in window]
-    avg_range = sum(ranges) / len(ranges)
-    volume_sma = _sma(volumes, 20) or 0.0
+    start = max(0, len(candles) - lookback)
     events = []
-    for candle in window:
+    for index in range(start, len(candles)):
+        candle = candles[index]
+        baseline = _displacement_baseline(candles, index)
+        if baseline is None:
+            continue
+        avg_range, volume_sma = baseline
         direction = _displacement_direction(candle, avg_range, volume_sma)
         if direction == "NONE":
             continue
@@ -1380,25 +1428,26 @@ def _fvg_record(direction: str, candles: list[dict[str, Any]], index: int, gap_l
 
 
 def _order_block_pack(candles: list[dict[str, Any]], lookback: int = 80) -> dict[str, Any]:
-    window = candles[-lookback:] if len(candles) > lookback else candles
-    if len(window) < 5:
+    if len(candles) < 5:
         return {"bullish_recent": [], "bearish_recent": []}
-    ranges = [max(float(candle["high"]) - float(candle["low"]), 1e-12) for candle in window]
-    volumes = [float(candle.get("volume") or 0.0) for candle in window]
-    avg_range = sum(ranges) / len(ranges)
-    volume_sma = _sma(volumes, 20) or 0.0
+    start = max(0, len(candles) - lookback)
     bullish = []
     bearish = []
-    for index, candle in enumerate(window):
+    for index in range(start, len(candles)):
+        candle = candles[index]
+        baseline = _displacement_baseline(candles, index)
+        if baseline is None:
+            continue
+        avg_range, volume_sma = baseline
         direction = _displacement_direction(candle, avg_range, volume_sma)
         if direction == "BULLISH":
-            block = _find_prior_opposite_candle(window, index, want_bearish=True)
+            block = _find_prior_opposite_candle(candles, index, want_bearish=True)
             if block:
-                bullish.append(_order_block_record(block, window, index, "bullish"))
+                bullish.append(_order_block_record(block, candles, index, "bullish"))
         elif direction == "BEARISH":
-            block = _find_prior_opposite_candle(window, index, want_bearish=False)
+            block = _find_prior_opposite_candle(candles, index, want_bearish=False)
             if block:
-                bearish.append(_order_block_record(block, window, index, "bearish"))
+                bearish.append(_order_block_record(block, candles, index, "bearish"))
     return {
         "bullish_recent": bullish[-3:],
         "bearish_recent": bearish[-3:],
@@ -1608,6 +1657,20 @@ def _displacement_direction(candle: dict[str, Any], avg_range: float, volume_sma
         if close < open_ and close_position <= 0.3:
             return "BEARISH"
     return "NONE"
+
+
+def _displacement_baseline(
+    candles: list[dict[str, Any]],
+    index: int,
+    baseline_lookback: int = 20,
+    minimum_history: int = 5,
+) -> tuple[float, float] | None:
+    history = candles[max(0, index - baseline_lookback) : index]
+    if len(history) < minimum_history:
+        return None
+    ranges = [max(float(candle["high"]) - float(candle["low"]), 1e-12) for candle in history]
+    volumes = [float(candle.get("volume") or 0.0) for candle in history]
+    return sum(ranges) / len(ranges), sum(volumes) / len(volumes)
 
 
 def _level_pools(levels: list[float], tolerance: float, current_price: float, minimum_touches: int = 2) -> list[dict[str, Any]]:
@@ -1865,20 +1928,142 @@ def _value_area_from_buckets(
     }
 
 
-def _opening_range(candles: list[dict[str, Any]]) -> dict[str, Any] | None:
+def _opening_range(candles: list[dict[str, Any]], minutes: int = 30) -> dict[str, Any] | None:
+    """Return the latest New York regular-session opening range.
+
+    Extended-hours candles are deliberately excluded.  A range is not eligible
+    for breakout decisions until all expected 15-minute bars have arrived.
+    """
+    session_date = _latest_local_date(candles)
+    if session_date is None:
+        return None
+    end_minutes = 9 * 60 + 30 + minutes
+    opening_bars = [
+        candle
+        for candle in candles
+        if _local_date(candle) == session_date
+        and 9 * 60 + 30 <= _local_minutes(candle) < end_minutes
+    ]
+    expected_bars = max(1, minutes // 15)
+    if not opening_bars:
+        return {
+            "date": session_date,
+            "minutes": minutes,
+            "bar_count": 0,
+            "expected_bar_count": expected_bars,
+            "complete": False,
+            "status": "NOT_STARTED",
+        }
+    complete = len(opening_bars) >= expected_bars
+    return {
+        "date": session_date,
+        "minutes": minutes,
+        "high": max(float(candle["high"]) for candle in opening_bars),
+        "low": min(float(candle["low"]) for candle in opening_bars),
+        "bar_count": len(opening_bars),
+        "expected_bar_count": expected_bars,
+        "complete": complete,
+        "status": "COMPLETE" if complete else "FORMING",
+    }
+
+
+def _premarket_summary(candles: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Summarize 04:00-09:30 ET and compute time-aligned premarket RVOL."""
+    session_date = _latest_local_date(candles)
+    if session_date is None:
+        return None
+    current = _session_window(candles, session_date, 4 * 60, 9 * 60 + 30)
+    if not current:
+        return {
+            "date": session_date,
+            "status": "NO_DATA",
+            "bar_count": 0,
+        }
+    cutoff = max(_local_minutes(candle) for candle in current)
+    prior_by_date: dict[str, list[dict[str, Any]]] = {}
+    for candle in candles:
+        date_value = _local_date(candle)
+        minute_value = _local_minutes(candle)
+        if date_value >= session_date or not 4 * 60 <= minute_value <= cutoff:
+            continue
+        prior_by_date.setdefault(date_value, []).append(candle)
+    historical_volumes = [
+        sum(float(candle.get("volume") or 0.0) for candle in rows)
+        for rows in prior_by_date.values()
+        if rows
+    ]
+    volume = sum(float(candle.get("volume") or 0.0) for candle in current)
+    average_volume = sum(historical_volumes[-20:]) / len(historical_volumes[-20:]) if historical_volumes else None
+    return {
+        "date": session_date,
+        "status": "OK" if volume > 0 else "PRICE_ONLY",
+        "high": max(float(candle["high"]) for candle in current),
+        "low": min(float(candle["low"]) for candle in current),
+        "volume": volume,
+        "relative_volume": volume / average_volume if average_volume else None,
+        "volume_quality": "AVAILABLE" if volume > 0 else "UNAVAILABLE_PROVIDER_ZERO_VOLUME",
+        "comparison_days": min(len(historical_volumes), 20),
+        "bar_count": len(current),
+        "through_et": f"{cutoff // 60:02d}:{cutoff % 60:02d}",
+    }
+
+
+def _regular_session_open(candles: list[dict[str, Any]], session_date: str | None) -> float | None:
+    if session_date is None:
+        return None
+    rows = _session_window(candles, session_date, 9 * 60 + 30, 16 * 60)
+    return float(rows[0]["open"]) if rows else None
+
+
+def _session_vwap(candles: list[dict[str, Any]], session_date: str | None) -> float | None:
+    if session_date is None:
+        return None
+    rows = _session_window(candles, session_date, 9 * 60 + 30, 16 * 60)
+    return _vwap(rows) if rows else None
+
+
+def _previous_daily_close(candles: list[dict[str, Any]], session_date: str | None) -> float | None:
     if not candles:
         return None
-    latest_day = str(candles[-1]["time"])[:10]
-    session = [candle for candle in candles if str(candle["time"])[:10] == latest_day]
-    if not session:
-        return None
-    first_bars = session[:2]
-    return {
-        "date": latest_day,
-        "high": max(float(candle["high"]) for candle in first_bars),
-        "low": min(float(candle["low"]) for candle in first_bars),
-        "bar_count": len(first_bars),
-    }
+    if session_date is None:
+        return float(candles[-1]["close"])
+    previous = [candle for candle in candles if _local_date(candle) < session_date]
+    return float(previous[-1]["close"]) if previous else None
+
+
+def _session_window(
+    candles: list[dict[str, Any]],
+    session_date: str,
+    start_minutes: int,
+    end_minutes: int,
+) -> list[dict[str, Any]]:
+    return [
+        candle
+        for candle in candles
+        if _local_date(candle) == session_date
+        and start_minutes <= _local_minutes(candle) < end_minutes
+    ]
+
+
+def _latest_local_date(candles: list[dict[str, Any]]) -> str | None:
+    return max((_local_date(candle) for candle in candles), default=None)
+
+
+def _local_date(candle: dict[str, Any]) -> str:
+    return _local_datetime(candle).date().isoformat()
+
+
+def _local_minutes(candle: dict[str, Any]) -> int:
+    local = _local_datetime(candle)
+    return local.hour * 60 + local.minute
+
+
+def _local_datetime(candle: dict[str, Any]) -> datetime:
+    value = str(candle["time"]).replace("Z", "+00:00")
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(NEW_YORK_TZ)
 
 
 def _relative_strength_vs_spy(candles: list[dict[str, Any]], spy_daily: list[dict[str, Any]], lookback: int) -> float | None:

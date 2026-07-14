@@ -12,11 +12,11 @@ builder = "DOCKERFILE"
 
 [deploy]
 startCommand = "python -m app.main report --hours 1 --send"
-cronSchedule = "0 2,10,16,22 * * *"
+cronSchedule = "30 12,13,14,15 * * 1-5"
 restartPolicyType = "NEVER"
 ```
 
-Railway schedules are UTC. The Cron service uses `0 2,10,16,22 * * *`, which triggers at 02:00, 10:00, 16:00, and 22:00 UTC.
+Railway schedules are UTC. The Cron service runs at 12:30, 13:30, 14:30 and 15:30 UTC on weekdays. Together these runs cover US pre-market and the early regular session in both EST and EDT. Application data is classified with `America/New_York` so Opening Range logic remains daylight-saving safe.
 
 ## Required Variables
 

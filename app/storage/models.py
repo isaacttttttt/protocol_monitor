@@ -32,6 +32,7 @@ klines = Table(
     Column("close", Numeric, nullable=False),
     Column("volume", Numeric, nullable=False),
     Column("quote_volume", Numeric),
+    Column("taker_buy_volume", Numeric),
     Column("is_closed", Boolean, default=True),
     Column("created_at", DateTime, server_default=func.now()),
     UniqueConstraint("exchange", "symbol", "interval", "open_time"),

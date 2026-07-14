@@ -8,6 +8,7 @@ from app.review import llm_protocol_report
 from app.review.indicator_snapshot import (
     IndicatorSnapshotEvent,
     _crypto_protocol_candidates,
+    _displacement_pack,
     _equity_protocol_candidates,
     _factor_pack,
     _indicator_pack,
@@ -167,6 +168,37 @@ def test_volume_profile_distributes_wide_candle_across_price_bins():
     assert profile["bins"][0]["volume"] == 50
     assert profile["bins"][1]["volume"] == 50
     assert profile["value_area_proxy"]["volume_ratio"] >= 0.7
+
+
+def test_future_volatility_does_not_relabel_past_displacement_events():
+    candles = _candles(45)
+    candles[6].update(
+        {
+            "open": candles[5]["close"],
+            "low": candles[5]["close"] - 0.5,
+            "high": candles[5]["close"] + 5.0,
+            "close": candles[5]["close"] + 4.8,
+            "volume": 10_000,
+        }
+    )
+    baseline = _displacement_pack(candles, lookback=40)
+    future = _candles(1)
+    for index, candle in enumerate(future):
+        candle["time"] = f"future-{index}"
+        candle["high"] *= 4
+        candle["low"] *= 0.25
+        candle["volume"] *= 100
+
+    extended = _displacement_pack(candles + future, lookback=40)
+    baseline_events = [(event["time"], event["direction"]) for event in baseline["recent"]]
+    extended_past_events = [
+        (event["time"], event["direction"])
+        for event in extended["recent"]
+        if not str(event["time"]).startswith("future-")
+    ]
+
+    assert baseline_events
+    assert extended_past_events == baseline_events
 
 
 def test_compact_snapshot_for_llm_removes_volume_profile_bins():

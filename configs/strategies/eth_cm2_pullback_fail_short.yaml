@@ -7,6 +7,10 @@ strategy_name: C-M2 Pullback Fail Short
 direction: SHORT
 max_hold_hours: 48
 
+dynamic_levels:
+  enabled: true
+  reference: 15m_session_vwap_atr
+
 zones:
   pullback_zone_1:
     low: 1583

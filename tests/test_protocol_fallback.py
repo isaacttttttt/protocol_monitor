@@ -1,13 +1,19 @@
+from datetime import datetime, timezone
+
 import pytest
 
 from app.review.protocol_analysis import (
     ProtocolAnalysis,
     _aggregate_candles,
+    _binance_klines,
     _brief_error,
+    _closed_yahoo_candles,
     _eth_final_instruction,
     _eth_protocol,
     _equity_final_instruction,
     _format_data_time,
+    _load_yahoo_crypto,
+    _okx_candles,
     _okx_symbol,
     _yahoo_chart,
     _yahoo_crypto_symbol,
@@ -46,6 +52,74 @@ def test_yahoo_chart_missing_timestamp_has_clear_error(monkeypatch):
 
     with pytest.raises(ValueError, match="no Yahoo chart data for INQU"):
         _yahoo_chart("INQU", "1d", "1y")
+
+
+def test_binance_klines_excludes_forming_bar_by_close_time(monkeypatch):
+    as_of = datetime(2026, 1, 1, 0, 15, tzinfo=timezone.utc)
+    cutoff_ms = int(as_of.timestamp() * 1000)
+    closed = _binance_row(0, cutoff_ms - 1, "100")
+    forming = _binance_row(cutoff_ms, cutoff_ms + 899_999, "999")
+    monkeypatch.setattr("app.review.protocol_analysis._binance_get", lambda path, params: [closed, forming])
+
+    candles = _binance_klines("ETHUSDT", "15m", 2, as_of=as_of)
+
+    assert [candle["close"] for candle in candles] == [100.0]
+
+
+def test_okx_candles_uses_exchange_confirmation_flag(monkeypatch):
+    monkeypatch.setattr(
+        "app.review.protocol_analysis._okx_get",
+        lambda path, params: {
+            "data": [
+                ["1704068100000", "100", "101", "99", "100", "10", "0", "0", "1"],
+                ["1704069000000", "100", "999", "99", "999", "10", "0", "0", "0"],
+            ]
+        },
+    )
+
+    candles = _okx_candles("ETH-USDT-SWAP", "15m", 2)
+
+    assert [candle["close"] for candle in candles] == [100.0]
+
+
+def test_yahoo_closed_bar_policy_keeps_current_quote_separate():
+    rows = [
+        _yahoo_row("2026-01-01T00:00:00+00:00", 100),
+        _yahoo_row("2026-01-01T00:15:00+00:00", 999),
+    ]
+    as_of = datetime(2026, 1, 1, 0, 20, tzinfo=timezone.utc)
+
+    closed = _closed_yahoo_candles(rows, "15m", as_of=as_of)
+
+    assert [candle["close"] for candle in closed] == [100]
+    assert rows[-1]["close"] == 999
+
+
+def test_yahoo_crypto_uses_forming_bar_for_quote_but_not_indicators(monkeypatch):
+    closed = _yahoo_row("2025-01-01T00:00:00+00:00", 100)
+    forming = _yahoo_row("2099-01-01T00:00:00+00:00", 999)
+
+    def fake_chart(symbol, interval, range_, **kwargs):
+        if interval == "15m" and kwargs.get("closed_only") is False:
+            return [closed, forming]
+        if interval == "60m":
+            return [dict(closed, time=f"2025-01-01T0{index}:00:00+00:00") for index in range(4)]
+        return [closed]
+
+    monkeypatch.setattr("app.review.protocol_analysis._yahoo_chart", fake_chart)
+
+    data = _load_yahoo_crypto("ETHUSDT")
+
+    assert data.last_price == 999
+    assert data.k15[-1]["close"] == 100
+
+
+def _binance_row(open_time: int, close_time: int, close: str) -> list[object]:
+    return [open_time, "100", "101", "99", close, "10", close_time, "1000", 1, "6", "600", "0"]
+
+
+def _yahoo_row(time: str, close: float) -> dict[str, float | str]:
+    return {"time": time, "open": close, "high": close, "low": close, "close": close, "volume": 1.0}
 
 
 def test_format_data_time_uses_local_timezone():

@@ -7,5 +7,6 @@ SQLAlchemy>=2
 asyncpg>=0.29
 aiosqlite>=0.19
 loguru>=0.7
+tzdata>=2025.2
 pytest>=8
 pytest-asyncio>=0.23

@@ -8,6 +8,10 @@ from app.strategies.base import StrategyContext
 from app.strategies.eth_cm2_pullback_fail_short import EthCm2PullbackFailShort
 from app.strategies.eth_cm3_liquidity_sweep_long import EthCm3LiquiditySweepLong
 from app.strategies.eth_stand_above_level import EthStandAboveLevel
+from app.strategies.dynamic_levels import (
+    build_liquidity_sweep_plan_from_candles,
+    build_pullback_short_plan_from_candles,
+)
 from app.strategies.state_machine import StrategyStateEnum
 
 from conftest import DummyRepo
@@ -21,6 +25,23 @@ def store():
 async def push(store, candle):
     await store.upsert_kline(candle)
     return StrategyContext(event=candle, store=store)
+
+
+async def seed_flat_15m(store, kline_factory, count=30, price=2000):
+    candles = []
+    for index in range(count):
+        candle = kline_factory(
+            "ETHUSDT",
+            "15m",
+            price,
+            price + 2,
+            price - 2,
+            price,
+            minutes=index * 15,
+        )
+        candles.append(candle)
+        await push(store, candle)
+    return candles
 
 
 def cm2_config(stop=1600):
@@ -97,6 +118,76 @@ async def test_eth_cm3_liquidity_sweep_l3(store, kline_factory):
     await strategy.on_market_update(await push(store, kline_factory("ETHUSDT", "5m", 1550, 1552, 1530, 1545)))
     signals = await strategy.on_market_update(await push(store, kline_factory("ETHUSDT", "15m", 1545, 1580, 1540, 1575)))
     assert any(signal.level == SignalLevel.L3 for signal in signals)
+
+
+@pytest.mark.asyncio
+async def test_dynamic_cm2_freezes_plan_and_ignores_legacy_fixed_stop(store, kline_factory):
+    candles = await seed_flat_15m(store, kline_factory)
+    plan = build_pullback_short_plan_from_candles(candles)
+    assert plan is not None
+    config = cm2_config(stop=1605)
+    config["dynamic_levels"] = {"enabled": True}
+    strategy = EthCm2PullbackFailShort(config)
+    touch_price = (plan.zone_low + plan.zone_high) / 2
+    touch = kline_factory(
+        "ETHUSDT",
+        "15m",
+        touch_price,
+        plan.zone_high,
+        plan.zone_low,
+        touch_price,
+        minutes=30 * 15,
+    )
+
+    touch_signals = await strategy.on_market_update(await push(store, touch))
+    frozen = strategy.state.context["dynamic_plan"]
+    trigger_price = plan.fail_back - 0.2
+    trigger = kline_factory(
+        "ETHUSDT",
+        "5m",
+        touch_price,
+        touch_price,
+        trigger_price - 0.2,
+        trigger_price,
+        minutes=30 * 15 + 5,
+    )
+    trigger_signals = await strategy.on_market_update(await push(store, trigger))
+
+    assert any(signal.level == SignalLevel.L2 for signal in touch_signals)
+    assert strategy.state.context["dynamic_plan"] == frozen
+    l3 = next(signal for signal in trigger_signals if signal.level == SignalLevel.L3)
+    assert float(l3.sl) == pytest.approx(plan.invalid)
+    assert float(l3.sl) != 1605
+
+
+@pytest.mark.asyncio
+async def test_dynamic_cm3_requires_micro_interval_and_freezes_sweep_plan(store, kline_factory):
+    candles = await seed_flat_15m(store, kline_factory)
+    plan = build_liquidity_sweep_plan_from_candles(candles)
+    assert plan is not None
+    config = {
+        "id": "ETH_C_M3_LIQUIDITY_SWEEP_LONG_V1",
+        "exchange": "BINANCE",
+        "symbol": "ETHUSDT",
+        "book": "Micro",
+        "strategy_name": "C-M3 Liquidity Sweep Long",
+        "direction": "LONG",
+        "dynamic_levels": {"enabled": True, "min_lower_wick_ratio": 0.3},
+        "levels": {"sweep_level_1": 1544, "reclaim_level_1": 1570},
+        "targets": {"tp1": 1645, "tp2": 1746, "tp3": 1982},
+        "stop_loss": {"atr_buffer_multiplier": 0.3},
+        "risk": {"min_rr_to_tp1": 1.5, "default_position_r": 0.25},
+    }
+    strategy = EthCm3LiquiditySweepLong(config)
+    ignored = kline_factory("ETHUSDT", "4h", 2000, 2002, plan.sweep_level - 5, 2001, minutes=30 * 15)
+    ignored_signals = await strategy.on_market_update(await push(store, ignored))
+    sweep = kline_factory("ETHUSDT", "15m", 2000, 2002, plan.sweep_level - 4, 2001, minutes=30 * 15)
+
+    signals = await strategy.on_market_update(await push(store, sweep))
+
+    assert ignored_signals == []
+    assert any(signal.level == SignalLevel.L3 for signal in signals)
+    assert strategy.state.context["dynamic_plan"]["sweep_level"] == pytest.approx(plan.sweep_level)
 
 
 @pytest.mark.asyncio

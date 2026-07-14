@@ -7,6 +7,11 @@ strategy_name: C-M3 Liquidity Sweep Long
 direction: LONG
 max_hold_hours: 48
 
+dynamic_levels:
+  enabled: true
+  reference: prior_20_bar_low_atr_reclaim
+  min_lower_wick_ratio: 0.3
+
 levels:
   sweep_level_1: 1544
   sweep_level_2: 1538

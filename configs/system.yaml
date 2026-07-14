@@ -11,6 +11,12 @@ risk:
   l4_duplicate_cooldown_minutes: 10
   default_position_r: 0.25
   max_micro_position_r: 0.5
+  max_cluster_position_r: 0.75
+  max_daily_loss_r: 1.0
+  drawdown_throttle_start_pct: 5.0
+  drawdown_stop_pct: 10.0
+  consecutive_loss_throttle: 3
+  paper_risk_per_1r_pct: 1.0
 
 notification:
   enabled: true
@@ -27,6 +33,8 @@ storage:
 
 automation:
   report_interval_hours: 1
+  market_timezone: America/New_York
+  equity_report_windows_et: ["08:30", "09:30", "10:30", "11:30"]
 
 report:
   include_protocol_analysis: true
@@ -34,3 +42,12 @@ report:
   crypto_symbols: ["ETHUSDT", "BTCUSDT"]
   equity_symbols: ["SOXL", "MU", "CRCL", "WDC", "ARM", "INTU", "INFQ"]
   equity_context_symbols: ["SPY", "QQQ", "IWM", "DIA", "XLK", "SMH", "SOXX", "^VIX", "^TNX", "DX-Y.NYB"]
+  orb_retest:
+    opening_range_minutes: 30
+    entry_cutoff_et: "12:00"
+    minimum_premarket_rvol: 1.5
+    minimum_confirmation_rvol: 1.2
+    minimum_absolute_gap_pct: 1.0
+    require_premarket_rvol: false
+    retest_buffer_fraction: 0.001
+    reward_r: 2.0

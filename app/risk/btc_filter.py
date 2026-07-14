@@ -15,7 +15,13 @@ class BtcFilterState:
 
 
 def evaluate_btc_filter(candles: list[Kline], macd: MacdResult, cvd: CvdResult, structure: StructureState) -> BtcFilterState:
-    if not candles or structure.last_swing_high is None or structure.last_swing_low is None:
+    if (
+        not candles
+        or structure.last_swing_high is None
+        or structure.last_swing_low is None
+        or not structure.swing_high_confirmed
+        or not structure.swing_low_confirmed
+    ):
         return BtcFilterState(False, False, True, "insufficient BTC context")
     close = float(candles[-1].close)
     strong_bullish = close > structure.last_swing_high and macd.histogram > 0 and cvd.delta > 0

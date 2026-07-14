@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.config.settings import get_settings
+from app.indicators.structure import detect_structure_values
 
 BINANCE_FAPI = "https://fapi.binance.com"
 OKX_REST = "https://www.okx.com"
@@ -151,13 +152,17 @@ def analyze_crypto(symbol: str) -> tuple[ProtocolAnalysis, dict[str, Any]]:
 def analyze_equity(symbol: str) -> ProtocolAnalysis:
     daily = _yahoo_chart(symbol, "1d", "1y")
     hourly = _yahoo_chart(symbol, "60m", "3mo")
-    m15 = _yahoo_chart(symbol, "15m", "1mo")
+    m15_rows = _yahoo_chart(symbol, "15m", "1mo", closed_only=False)
+    m15 = _closed_yahoo_candles(m15_rows, "15m")
+    if not m15:
+        raise ValueError(f"no closed Yahoo chart data for {symbol} 15m")
     d = _candle_state(daily)
     h = _candle_state(hourly)
     q = _candle_state(m15)
     last = daily[-1]
-    previous = daily[-2] if len(daily) > 1 else last
-    change_pct = ((last["close"] / previous["close"]) - 1) * 100 if previous["close"] else None
+    latest_quote = m15_rows[-1]
+    price = float(latest_quote["close"])
+    change_pct = ((price / last["close"]) - 1) * 100 if last["close"] else None
 
     current_status, hit_status = _equity_status(d, h, q)
     swing_low = d["structure"]["last_swing_low"]
@@ -179,11 +184,11 @@ def analyze_equity(symbol: str) -> ProtocolAnalysis:
         f"1d ATR14 {d['atr']:.2f}, MACD hist {d['macd']['hist']:.2f}, CVD trend {d['cvd']['trend']}",
         f"60m trend {h['structure']['trend']}, 15m trend {q['structure']['trend']}",
     ]
-    final_instruction = _equity_final_instruction(symbol, float(last["close"]), last, d, h, q)
+    final_instruction = _equity_final_instruction(symbol, price, last, d, h, q)
     return ProtocolAnalysis(
         symbol=symbol,
         market="US Equity",
-        price=float(last["close"]),
+        price=price,
         change_pct=change_pct,
         current_status=current_status,
         hit_status=hit_status,
@@ -192,7 +197,7 @@ def analyze_equity(symbol: str) -> ProtocolAnalysis:
         key_levels=key_levels,
         final_instruction=final_instruction,
         evidence=evidence,
-        updated_at=m15[-1]["time"],
+        updated_at=latest_quote["time"],
     )
 
 
@@ -437,8 +442,15 @@ def _candle_state(candles: list[dict[str, float]]) -> dict[str, Any]:
     }
 
 
-def _binance_klines(symbol: str, interval: str, limit: int) -> list[dict[str, float]]:
+def _binance_klines(
+    symbol: str,
+    interval: str,
+    limit: int,
+    *,
+    as_of: datetime | None = None,
+) -> list[dict[str, float]]:
     rows = _binance_get("/fapi/v1/klines", {"symbol": symbol, "interval": interval, "limit": limit})
+    cutoff_ms = int(_as_utc(as_of).timestamp() * 1000)
     return [
         {
             "time": datetime.fromtimestamp(int(row[0]) / 1000, tz=timezone.utc).isoformat(),
@@ -453,6 +465,7 @@ def _binance_klines(symbol: str, interval: str, limit: int) -> list[dict[str, fl
             "taker_buy_quote_volume": float(row[10]),
         }
         for row in rows
+        if int(row[6]) <= cutoff_ms
     ]
 
 
@@ -533,13 +546,16 @@ def _load_okx_crypto(symbol: str) -> CryptoMarketData:
 
 def _load_yahoo_crypto(symbol: str) -> CryptoMarketData:
     yahoo_symbol = _yahoo_crypto_symbol(symbol)
-    k15 = _yahoo_chart(yahoo_symbol, "15m", "5d")[-120:]
+    k15_rows = _yahoo_chart(yahoo_symbol, "15m", "5d", closed_only=False)
+    k15 = _closed_yahoo_candles(k15_rows, "15m")[-120:]
+    if not k15:
+        raise ValueError(f"no closed Yahoo chart data for {yahoo_symbol} 15m")
     k5 = _yahoo_chart(yahoo_symbol, "5m", "5d")[-80:]
     hourly = _yahoo_chart(yahoo_symbol, "60m", "3mo")
     k4 = _aggregate_candles(hourly, 4)[-120:]
     k1d = _yahoo_chart(yahoo_symbol, "1d", "1y")[-120:]
-    day_window = k15[-96:] if len(k15) >= 96 else k15
-    last = k15[-1]
+    day_window = k15_rows[-96:] if len(k15_rows) >= 96 else k15_rows
+    last = k15_rows[-1]
     reference = day_window[0]
     return CryptoMarketData(
         source="Yahoo spot",
@@ -573,6 +589,7 @@ def _okx_candles(inst_id: str, bar: str, limit: int) -> list[dict[str, Any]]:
             "volume": float(row[5]),
         }
         for row in rows
+        if len(row) > 8 and str(row[8]) == "1"
     ]
     candles.sort(key=lambda item: item["time"])
     if not candles:
@@ -592,9 +609,23 @@ def _yahoo_crypto_symbol(symbol: str) -> str:
     raise ValueError(f"unsupported Yahoo crypto symbol: {symbol}")
 
 
-def _yahoo_chart(symbol: str, interval: str, range_: str) -> list[dict[str, float]]:
+def _yahoo_chart(
+    symbol: str,
+    interval: str,
+    range_: str,
+    *,
+    include_prepost: bool = False,
+    closed_only: bool = True,
+    as_of: datetime | None = None,
+) -> list[dict[str, float]]:
     base = get_settings().yahoo_chart_base or YAHOO_CHART
-    result = _get_json(f"{base.rstrip('/')}/{symbol}", {"interval": interval, "range": range_})["chart"]["result"][0]
+    params = {
+        "interval": interval,
+        "range": range_,
+        "includePrePost": "true" if include_prepost else "false",
+        "events": "div,splits",
+    }
+    result = _get_json(f"{base.rstrip('/')}/{symbol}", params)["chart"]["result"][0]
     timestamps = result.get("timestamp") or []
     if not timestamps:
         raise ValueError(f"no Yahoo chart data for {symbol}")
@@ -616,7 +647,57 @@ def _yahoo_chart(symbol: str, interval: str, range_: str) -> list[dict[str, floa
         )
     if not rows:
         raise ValueError(f"no Yahoo chart data for {symbol}")
-    return rows
+    if not closed_only:
+        return rows
+    closed = _closed_yahoo_candles(rows, interval, as_of=as_of)
+    if not closed:
+        raise ValueError(f"no closed Yahoo chart data for {symbol} {interval}")
+    return closed
+
+
+def _closed_yahoo_candles(
+    candles: list[dict[str, Any]],
+    interval: str,
+    *,
+    as_of: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Treat a Yahoo bar as closed only after its nominal interval has ended."""
+    cutoff = _as_utc(as_of)
+    duration = _yahoo_interval_duration(interval)
+    return [
+        candle
+        for candle in candles
+        if _parse_utc_time(str(candle["time"])) + duration <= cutoff
+    ]
+
+
+def _yahoo_interval_duration(interval: str) -> timedelta:
+    if interval.endswith("wk"):
+        return timedelta(weeks=int(interval[:-2]))
+    if interval.endswith("mo"):
+        return timedelta(days=31 * int(interval[:-2]))
+    if interval.endswith("m"):
+        return timedelta(minutes=int(interval[:-1]))
+    if interval.endswith("h"):
+        return timedelta(hours=int(interval[:-1]))
+    if interval.endswith("d"):
+        return timedelta(days=int(interval[:-1]))
+    raise ValueError(f"unsupported Yahoo interval for closed-bar policy: {interval}")
+
+
+def _parse_utc_time(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _as_utc(value: datetime | None) -> datetime:
+    if value is None:
+        return datetime.now(timezone.utc)
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _get_json(url: str, params: dict[str, Any]) -> Any:
@@ -748,21 +829,23 @@ def _cvd_proxy(candles: list[dict[str, float]], lookback: int = 20) -> dict[str,
 
 
 def _structure(candles: list[dict[str, float]], lookback: int = 20) -> dict[str, Any]:
-    if len(candles) < 3:
-        return {"last_swing_high": 0.0, "last_swing_low": 0.0, "bos_up": False, "bos_down": False, "trend": "RANGE"}
-    lookback = min(lookback, len(candles) - 1)
-    window = candles[-lookback - 1 : -1]
-    last = candles[-1]
-    swing_high = max(candle["high"] for candle in window)
-    swing_low = min(candle["low"] for candle in window)
-    bos_up = last["close"] > swing_high
-    bos_down = last["close"] < swing_low
+    window = candles[-lookback:] if lookback > 0 else candles
+    state = detect_structure_values(
+        [float(candle["high"]) for candle in window],
+        [float(candle["low"]) for candle in window],
+        [float(candle["close"]) for candle in window],
+    )
     return {
-        "last_swing_high": swing_high,
-        "last_swing_low": swing_low,
-        "bos_up": bos_up,
-        "bos_down": bos_down,
-        "trend": "UP" if bos_up else "DOWN" if bos_down else "RANGE",
+        "last_swing_high": state.last_swing_high,
+        "last_swing_low": state.last_swing_low,
+        "bos_up": state.bos_up,
+        "bos_down": state.bos_down,
+        "choch_up": state.choch_up,
+        "choch_down": state.choch_down,
+        "swing_high_confirmed": state.swing_high_confirmed,
+        "swing_low_confirmed": state.swing_low_confirmed,
+        "trend": state.trend,
+        "method": "confirmed causal pivots (2 left / 2 right), rolling fallback until confirmation",
     }
 
 

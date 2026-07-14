@@ -128,13 +128,13 @@ For scheduled Feishu reports, Railway Cron can run this workflow because each ru
 python -m app.main report --hours 1 --send
 ```
 
-with cron schedule:
+with a weekday schedule covering both EST and EDT pre-market/open windows:
 
 ```text
-0 2,10,16,22 * * *
+30 12,13,14,15 * * 1-5
 ```
 
-Railway schedules are UTC. This service triggers at 02:00, 10:00, 16:00, and 22:00 UTC.
+Railway schedules are UTC. Running at 12:30-15:30 UTC covers pre-market and the first two regular-session hours across US daylight-saving transitions. The snapshot itself classifies bars with `America/New_York`; it never assumes a fixed UTC offset.
 
 See `RAILWAY.md` for the full deployment steps and required Railway variables.
 
@@ -154,7 +154,15 @@ Current strategies:
 
 Important: C-M2 uses the active pressure-zone invalidation plus the configured ATR buffer. Live L3 still obeys the R/R filter; if `TP1 R/R < 1.5`, the system downgrades to L2.
 
-US-equity sector metadata lives in `configs/equity_sectors.yaml`. SOXL is evaluated as a daily-reset 3x semiconductor ETF against SOXX/SMH; MU is evaluated as a semiconductor memory stock against SOXX/SMH plus configured peers. Python supplies factors and candidate setups only—the LLM owns final Micro/Macro scoring and judgment.
+US-equity sector metadata lives in `configs/equity_sectors.yaml`. SOXL is evaluated as a daily-reset 3x semiconductor ETF against SOXX/SMH; MU is evaluated as a semiconductor memory stock against SOXX/SMH plus configured peers. Python computes a deterministic ORB-retest execution gate from pre-market RVOL, gap, completed opening range, session VWAP, volume confirmation and sector alignment. The LLM explains and scores the evidence but cannot upgrade an untriggered ORB candidate to a trade.
+
+Live crypto strategies use dynamic causal reference levels when enough history is available: C-M2 derives a 15m VWAP/ATR pullback zone, and C-M3 uses the prior 20-bar low plus an ATR reclaim. YAML price levels remain fallback references for startup or insufficient data.
+
+L3 signals are paper trades. Subsequent closed 1m/5m candles update TP1, breakeven-after-TP1, TP2, stop and time-stop outcomes. Portfolio risk caps correlated crypto/semiconductor exposure and can downgrade an L3 signal to L2 when no cluster risk budget remains.
+
+## Backtest Core
+
+`app/backtest` provides a causal bar-by-bar simulator. A signal produced from a closed bar fills at the next bar open, includes configurable fees/slippage, treats a same-bar stop/target collision conservatively, and reports net return, maximum drawdown, Calmar, per-trade Sharpe, win rate, profit factor and exposure. `run_walk_forward` selects parameters only on a training window and freezes them for the following test window.
 
 ## Add A Strategy
 

@@ -11,6 +11,7 @@ from app.market.data_bus import MarketDataBus
 from app.market.kline_store import KlineStore
 from app.review.reporter import PeriodicReporter
 from app.signals.router import SignalRouter
+from app.signals.lifecycle import SignalLifecycleManager
 from app.storage.db import create_engine, create_session_factory, init_db
 from app.storage.repositories import IndicatorArchiveRepository, IndicatorRepository, KlineRepository, SignalRepository
 from app.strategies.base import StrategyContext
@@ -48,6 +49,10 @@ async def run_monitor(run_once: bool = False) -> None:
     signal_repo = SignalRepository(session_factory)
     indicator_repo = IndicatorRepository(session_factory)
     router = SignalRouter(settings, signal_repo, system_config)
+    lifecycle = SignalLifecycleManager(
+        signal_repo,
+        micro_max_hold_hours=int(system_config.get("risk", {}).get("micro_max_hold_hours", 48)),
+    )
     strategies = [STRATEGY_TYPES[cfg["id"]](cfg) for cfg in strategy_configs if cfg["id"] in STRATEGY_TYPES]
     persisted_states = await signal_repo.get_strategy_states()
     for strategy in strategies:
@@ -66,6 +71,11 @@ async def run_monitor(run_once: bool = False) -> None:
             await store.upsert_kline(event)
             if not event.is_closed:
                 continue
+            if event.interval in {"1m", "5m"}:
+                resolved_signal_ids = await lifecycle.on_closed_kline(event)
+                for signal_id in resolved_signal_ids:
+                    for strategy in strategies:
+                        strategy.on_signal_resolved(signal_id, event.close_time)
             candles = store.get_recent(event.exchange, event.symbol, event.interval, 100)
             macd = calculate_macd(candles)
             cvd = calculate_cvd_proxy(candles)
@@ -91,6 +101,8 @@ async def run_monitor(run_once: bool = False) -> None:
                         "choch_down": structure.choch_down,
                         "last_swing_high": structure.last_swing_high,
                         "last_swing_low": structure.last_swing_low,
+                        "swing_high_confirmed": structure.swing_high_confirmed,
+                        "swing_low_confirmed": structure.swing_low_confirmed,
                     },
                 }
             )

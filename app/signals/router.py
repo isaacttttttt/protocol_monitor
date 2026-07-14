@@ -8,6 +8,7 @@ from app.notifications.base import NotificationMessage
 from app.notifications.feishu import FeishuNotifier
 from app.notifications.telegram import TelegramNotifier
 from app.risk.cooldown import SignalCooldown
+from app.risk.portfolio import PortfolioRiskConfig, PortfolioRiskPolicy, PortfolioRiskState
 from app.signals.models import Signal, SignalLevel
 from app.signals.templates import render_signal
 from app.storage.repositories import SignalRepository
@@ -19,12 +20,40 @@ class SignalRouter:
         self.repository = repository
         self.notification_config = notification_config
         self.cooldown = SignalCooldown()
+        risk_config = notification_config.get("risk", {})
+        self.portfolio_risk = PortfolioRiskPolicy(
+            PortfolioRiskConfig(
+                max_position_r=float(risk_config.get("max_micro_position_r", 0.5)),
+                max_cluster_r=float(risk_config.get("max_cluster_position_r", 0.75)),
+                max_daily_loss_r=float(risk_config.get("max_daily_loss_r", 1.0)),
+                drawdown_throttle_start_pct=float(risk_config.get("drawdown_throttle_start_pct", 5.0)),
+                drawdown_stop_pct=float(risk_config.get("drawdown_stop_pct", 10.0)),
+                consecutive_loss_throttle=int(risk_config.get("consecutive_loss_throttle", 3)),
+            )
+        )
+        self.risk_per_1r_pct = float(risk_config.get("paper_risk_per_1r_pct", 1.0))
         self.notifiers = {
             "telegram": TelegramNotifier(settings),
             "feishu": FeishuNotifier(settings),
         }
 
     async def route(self, signal: Signal, strategy_id: str) -> None:
+        if signal.level == SignalLevel.L3 and signal.position_r > 0:
+            risk_state = PortfolioRiskState(
+                **await self.repository.get_portfolio_risk_state(risk_per_1r_pct=self.risk_per_1r_pct)
+            )
+            decision = self.portfolio_risk.assess(
+                signal,
+                await self.repository.get_manageable_signals(),
+                risk_state,
+            )
+            signal.position_r = decision.allowed_position_r
+            if decision.reasons:
+                signal.risk_flags["portfolio_risk"] = list(decision.reasons)
+            if decision.blocked:
+                signal.level = SignalLevel.L2
+                signal.status = "WATCHING"
+                signal.risk_flags["portfolio_blocked"] = True
         await self.repository.save_signal(signal)
         ordinary = int(self.notification_config.get("risk", {}).get("duplicate_signal_cooldown_minutes", 30))
         l4 = int(self.notification_config.get("risk", {}).get("l4_duplicate_cooldown_minutes", 10))
