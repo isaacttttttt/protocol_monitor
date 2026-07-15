@@ -35,6 +35,12 @@ automation:
   report_interval_hours: 1
   market_timezone: America/New_York
   equity_report_windows_et: ["08:30", "09:30", "10:30", "11:30"]
+  report_schedule:
+    enabled: true
+    timezone: Asia/Shanghai
+    weekdays: [1, 2, 3, 4, 5]
+    times: ["00:00", "10:00", "21:30", "22:00", "22:30", "23:00"]
+    grace_minutes: 10
 
 report:
   include_protocol_analysis: true

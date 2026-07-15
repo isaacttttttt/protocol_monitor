@@ -11,12 +11,21 @@ The repository includes `railway.toml`:
 builder = "DOCKERFILE"
 
 [deploy]
-startCommand = "python -m app.main report --hours 1 --send"
-cronSchedule = "30 12,13,14,15 * * 1-5"
+startCommand = "python -m app.main scheduled-report --hours 1 --send"
+cronSchedule = "0,30 2,13,14,15,16 * * 0-5"
 restartPolicyType = "NEVER"
 ```
 
-Railway schedules are UTC. The Cron service runs at 12:30, 13:30, 14:30 and 15:30 UTC on weekdays. Together these runs cover US pre-market and the early regular session in both EST and EDT. Application data is classified with `America/New_York` so Opening Range logic remains daylight-saving safe.
+Railway schedules are UTC. This candidate expression covers the required UTC+8 windows, including local Monday 00:00 from a Sunday 16:00 UTC run. Because a single Cron expression cannot encode the six uneven times exactly, `scheduled-report` applies the `Asia/Shanghai` weekday/time allowlist before any market-data fetch, LLM call, or notification. Candidate times such as 10:30, 21:00, and 23:30 UTC+8 exit immediately without sending.
+
+Actual push times, Monday through Friday in UTC+8:
+
+- 10:00
+- 21:30
+- 22:00
+- 22:30
+- 23:00
+- 00:00
 
 ## Required Variables
 
@@ -71,8 +80,8 @@ Without Postgres or a volume, the Feishu report still works, but historical indi
 2. In Railway, create a new project from the GitHub repo.
 3. Keep the generated service as a Cron Job service.
 4. Confirm the service settings show:
-   - Start Command: `python -m app.main report --hours 1 --send`
-   - Cron Schedule: `0 2,10,16,22 * * *`
+   - Start Command: `python -m app.main scheduled-report --hours 1 --send`
+   - Cron Schedule: `0,30 2,13,14,15,16 * * 0-5`
 5. Add the variables above in the service Variables tab.
 6. Deploy and open Logs to confirm the report prints and Feishu receives an `SPM 1H OpenOX` report or the provider name configured in `configs/llms/<LLM_CONFIG>.yaml`.
 

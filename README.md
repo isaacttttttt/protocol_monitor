@@ -125,16 +125,16 @@ The app reads tokens from your shell environment or `.env`.
 For scheduled Feishu reports, Railway Cron can run this workflow because each run is a short-lived outbound HTTPS job. The repo includes `railway.toml`, which runs:
 
 ```powershell
-python -m app.main report --hours 1 --send
+python -m app.main scheduled-report --hours 1 --send
 ```
 
-with a weekday schedule covering both EST and EDT pre-market/open windows:
+with a UTC candidate schedule for the configured UTC+8 weekday push windows:
 
 ```text
-30 12,13,14,15 * * 1-5
+0,30 2,13,14,15,16 * * 0-5
 ```
 
-Railway schedules are UTC. Running at 12:30-15:30 UTC covers pre-market and the first two regular-session hours across US daylight-saving transitions. The snapshot itself classifies bars with `America/New_York`; it never assumes a fixed UTC offset.
+Railway schedules are UTC. The candidate schedule includes a few no-op runs because one Cron expression cannot represent the six uneven local times exactly. `scheduled-report` checks `Asia/Shanghai`, weekdays, and the configured local-time allowlist before fetching data or sending anything. The actual push times are 10:00, 21:30, 22:00, 22:30, 23:00, and 00:00 UTC+8, Monday through Friday.
 
 See `RAILWAY.md` for the full deployment steps and required Railway variables.
 
@@ -199,6 +199,12 @@ The first command prints a local summary. The second command streams one LLM rep
 ```yaml
 automation:
   report_interval_hours: 1
+  report_schedule:
+    enabled: true
+    timezone: Asia/Shanghai
+    weekdays: [1, 2, 3, 4, 5]
+    times: ["00:00", "10:00", "21:30", "22:00", "22:30", "23:00"]
+    grace_minutes: 10
 
 report:
   use_llm_analysis: true

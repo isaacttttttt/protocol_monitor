@@ -1,6 +1,6 @@
 import argparse
 import asyncio
-from datetime import datetime
+from datetime import UTC, datetime
 
 from loguru import logger
 
@@ -10,6 +10,7 @@ from app.connectors.binance_futures import BinanceFuturesConnector
 from app.market.data_bus import MarketDataBus
 from app.market.kline_store import KlineStore
 from app.review.reporter import PeriodicReporter
+from app.review.report_schedule import evaluate_report_schedule
 from app.signals.router import SignalRouter
 from app.signals.lifecycle import SignalLifecycleManager
 from app.storage.db import create_engine, create_session_factory, init_db
@@ -144,14 +145,51 @@ async def run_report(hours: int | None = None, send: bool = False) -> None:
         await engine.dispose()
 
 
+async def run_scheduled_report(
+    hours: int | None = None,
+    send: bool = False,
+    now: datetime | None = None,
+) -> bool:
+    settings = get_settings()
+    logger.remove()
+    logger.add(lambda msg: print(msg, end=""), level=settings.log_level)
+    system_config = load_system_config()
+    decision = evaluate_report_schedule(
+        now or datetime.now(UTC),
+        system_config.get("automation", {}),
+    )
+    if not decision.due:
+        logger.info(
+            "scheduled report skipped: {} local_time={}",
+            decision.reason,
+            decision.local_time.isoformat(),
+        )
+        return False
+
+    logger.info(
+        "scheduled report accepted: slot={} local_time={}",
+        decision.slot.isoformat() if decision.slot else "unknown",
+        decision.local_time.isoformat(),
+    )
+    await run_report(hours=hours, send=send)
+    return True
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="SmartMoney Protocol Monitor")
-    parser.add_argument("command", nargs="?", choices=["monitor", "report"], default="monitor")
+    parser.add_argument(
+        "command",
+        nargs="?",
+        choices=["monitor", "report", "scheduled-report"],
+        default="monitor",
+    )
     parser.add_argument("--run-once", action="store_true", help="Initialize config/database and exit.")
     parser.add_argument("--hours", type=int, default=None, help="Report lookback window in hours.")
     parser.add_argument("--send", action="store_true", help="Send report through enabled notification channels.")
     args = parser.parse_args()
-    if args.command == "report":
+    if args.command == "scheduled-report":
+        asyncio.run(run_scheduled_report(hours=args.hours, send=args.send))
+    elif args.command == "report":
         asyncio.run(run_report(hours=args.hours, send=args.send))
     else:
         asyncio.run(run_monitor(run_once=args.run_once))
