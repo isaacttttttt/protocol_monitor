@@ -18,6 +18,8 @@ restartPolicyType = "NEVER"
 
 Railway schedules are UTC. This candidate expression covers the required UTC+8 windows, including local Monday 00:00 from a Sunday 16:00 UTC run. Because a single Cron expression cannot encode the six uneven times exactly, `scheduled-report` applies the `Asia/Shanghai` weekday/time allowlist before any market-data fetch, LLM call, or notification. Candidate times such as 10:30, 21:00, and 23:30 UTC+8 exit immediately without sending.
 
+The Railway Run button remains available for manual debugging. An invocation outside the known Cron candidate windows is classified as manual and sends immediately. The logs show `manual report run accepted`. A manual click made during a no-op candidate window may still be skipped; the always-run CLI command is `python -m app.main report --hours 1 --send`.
+
 Actual push times, Monday through Friday in UTC+8:
 
 - 10:00

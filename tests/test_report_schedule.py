@@ -14,6 +14,19 @@ SCHEDULE = {
         "timezone": "Asia/Shanghai",
         "weekdays": [1, 2, 3, 4, 5],
         "times": ["00:00", "10:00", "21:30", "22:00", "22:30", "23:00"],
+        "candidate_times": [
+            "00:00",
+            "00:30",
+            "10:00",
+            "10:30",
+            "21:00",
+            "21:30",
+            "22:00",
+            "22:30",
+            "23:00",
+            "23:30",
+        ],
+        "manual_run_outside_candidates": True,
         "grace_minutes": 10,
     }
 }
@@ -31,6 +44,7 @@ def test_weekday_configured_push_times_are_due(hour: int, minute: int):
 
     assert decision.due is True
     assert decision.slot == local_now
+    assert decision.trigger == "scheduled"
 
 
 def test_local_monday_midnight_uses_sunday_utc_candidate():
@@ -49,7 +63,7 @@ def test_candidate_cron_extra_times_do_not_push(hour: int, minute: int):
     decision = evaluate_report_schedule(local_now.astimezone(UTC), SCHEDULE)
 
     assert decision.due is False
-    assert decision.reason == "outside configured time slots"
+    assert decision.reason == "candidate slot is not a push slot"
 
 
 def test_weekend_does_not_push_even_at_configured_time():
@@ -61,14 +75,26 @@ def test_weekend_does_not_push_even_at_configured_time():
     assert decision.reason == "outside configured weekdays"
 
 
-def test_small_railway_start_delay_is_accepted_but_late_run_is_not():
+def test_small_railway_start_delay_is_scheduled_and_non_candidate_is_manual():
     slot = datetime(2026, 7, 13, 10, 0, tzinfo=SHANGHAI)
 
     accepted = evaluate_report_schedule((slot + timedelta(minutes=9)).astimezone(UTC), SCHEDULE)
     rejected = evaluate_report_schedule((slot + timedelta(minutes=11)).astimezone(UTC), SCHEDULE)
 
     assert accepted.due is True
-    assert rejected.due is False
+    assert accepted.trigger == "scheduled"
+    assert rejected.due is True
+    assert rejected.trigger == "manual"
+
+
+def test_arbitrary_railway_run_is_treated_as_manual():
+    manual_time = datetime(2026, 7, 13, 13, 54, tzinfo=SHANGHAI)
+
+    decision = evaluate_report_schedule(manual_time.astimezone(UTC), SCHEDULE)
+
+    assert decision.due is True
+    assert decision.trigger == "manual"
+    assert decision.slot is None
 
 
 def test_schedule_requires_timezone_aware_now():
@@ -114,6 +140,28 @@ async def test_scheduled_entrypoint_runs_report_at_allowed_slot(monkeypatch):
         hours=1,
         send=True,
         now=configured_slot.astimezone(UTC),
+    )
+
+    assert ran is True
+    assert calls == [(1, True)]
+
+
+@pytest.mark.asyncio
+async def test_scheduled_entrypoint_runs_report_for_manual_button(monkeypatch):
+    calls = []
+
+    async def fake_run_report(*, hours, send):
+        calls.append((hours, send))
+
+    monkeypatch.setattr(main, "get_settings", lambda: Settings(log_level="CRITICAL"))
+    monkeypatch.setattr(main, "load_system_config", lambda: {"automation": SCHEDULE})
+    monkeypatch.setattr(main, "run_report", fake_run_report)
+    manual_time = datetime(2026, 7, 13, 13, 54, tzinfo=SHANGHAI)
+
+    ran = await main.run_scheduled_report(
+        hours=1,
+        send=True,
+        now=manual_time.astimezone(UTC),
     )
 
     assert ran is True

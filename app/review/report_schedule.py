@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, time
+from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
@@ -11,6 +12,7 @@ class ScheduledReportDecision:
     local_time: datetime
     slot: datetime | None
     reason: str
+    trigger: Literal["scheduled", "manual", "skip"] = "skip"
 
 
 def evaluate_report_schedule(
@@ -32,25 +34,67 @@ def evaluate_report_schedule(
     if not bool(schedule.get("enabled", False)):
         return ScheduledReportDecision(False, local_now, None, "schedule disabled")
 
-    weekdays = _weekdays(schedule.get("weekdays", [1, 2, 3, 4, 5]))
-    if local_now.isoweekday() not in weekdays:
-        return ScheduledReportDecision(False, local_now, None, "outside configured weekdays")
-
     grace_minutes = int(schedule.get("grace_minutes", 10))
     if grace_minutes < 0 or grace_minutes >= 30:
         raise ValueError("report schedule grace_minutes must be between 0 and 29")
 
-    configured_times = schedule.get("times") or []
-    slots = [
+    configured_slots = [
         datetime.combine(local_now.date(), _parse_time(value), tzinfo=local_timezone)
-        for value in configured_times
+        for value in (schedule.get("times") or [])
     ]
+    weekdays = _weekdays(schedule.get("weekdays", [1, 2, 3, 4, 5]))
+    if local_now.isoweekday() in weekdays:
+        slot = _matching_slot(local_now, configured_slots, grace_minutes)
+        if slot is not None:
+            return ScheduledReportDecision(
+                True,
+                local_now,
+                slot,
+                "matched configured slot",
+                "scheduled",
+            )
+
+    candidate_values = schedule.get("candidate_times") or []
+    manual_runs = bool(schedule.get("manual_run_outside_candidates", False))
+    if manual_runs and not candidate_values:
+        raise ValueError(
+            "report schedule candidate_times are required when manual runs are enabled"
+        )
+    candidate_slots = [
+        datetime.combine(local_now.date(), _parse_time(value), tzinfo=local_timezone)
+        for value in candidate_values
+    ]
+    candidate = _matching_slot(local_now, candidate_slots, grace_minutes)
+    if candidate is not None:
+        reason = (
+            "outside configured weekdays"
+            if local_now.isoweekday() not in weekdays
+            else "candidate slot is not a push slot"
+        )
+        return ScheduledReportDecision(False, local_now, candidate, reason)
+
+    if manual_runs:
+        return ScheduledReportDecision(
+            True,
+            local_now,
+            None,
+            "manual run outside cron candidate slots",
+            "manual",
+        )
+
+    return ScheduledReportDecision(False, local_now, None, "outside configured time slots")
+
+
+def _matching_slot(
+    local_now: datetime,
+    slots: list[datetime],
+    grace_minutes: int,
+) -> datetime | None:
     for slot in slots:
         delay_minutes = (local_now - slot).total_seconds() / 60
         if 0 <= delay_minutes <= grace_minutes:
-            return ScheduledReportDecision(True, local_now, slot, "matched configured slot")
-
-    return ScheduledReportDecision(False, local_now, None, "outside configured time slots")
+            return slot
+    return None
 
 
 def _parse_time(value: object) -> time:

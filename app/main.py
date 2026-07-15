@@ -166,11 +166,14 @@ async def run_scheduled_report(
         )
         return False
 
-    logger.info(
-        "scheduled report accepted: slot={} local_time={}",
-        decision.slot.isoformat() if decision.slot else "unknown",
-        decision.local_time.isoformat(),
-    )
+    if decision.trigger == "manual":
+        logger.info("manual report run accepted: local_time={}", decision.local_time.isoformat())
+    else:
+        logger.info(
+            "scheduled report accepted: slot={} local_time={}",
+            decision.slot.isoformat() if decision.slot else "unknown",
+            decision.local_time.isoformat(),
+        )
     await run_report(hours=hours, send=send)
     return True
 
