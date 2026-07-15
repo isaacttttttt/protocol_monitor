@@ -54,7 +54,7 @@ YAHOO_CHART_BASE=https://query1.finance.yahoo.com/v8/finance/chart
 WATCHLIST_CRYPTO_SYMBOLS=ETHUSDT,BTCUSDT
 WATCHLIST_EQUITY_SYMBOLS=SOXL,MU,CRCL,WDC,ARM,INTU,INFQ
 EQUITY_CONTEXT_SYMBOLS=SPY,QQQ,IWM,DIA,XLK,SMH,SOXX,^VIX,^TNX,DX-Y.NYB
-LLM_CONFIG=fineres
+LLM_CONFIG=openox
 LLM_CONFIG_DIR=configs/llms
 LLM_API_KEY=
 INDICATOR_ARCHIVE_PATH=data/indicator_snapshots.jsonl
@@ -64,7 +64,7 @@ EQUITY_PROTOCOL_PATH=protocols/equity_smartmoney_protocol_v17.md
 
 All tokens and webhook secrets live in this configuration layer. Do not edit them into Python files.
 
-LLM provider details live under `configs/llms/`. Use `LLM_CONFIG=fineres` to select `configs/llms/fineres.yaml`; switch providers by changing `LLM_CONFIG` and `LLM_API_KEY`. URL, model, timeout, and provider-specific request parameters belong in the YAML file, not in `.env`.
+LLM provider details live under `configs/llms/`. Use `LLM_CONFIG=openox` to select `configs/llms/openox.yaml`; switch providers by changing `LLM_CONFIG` and `LLM_API_KEY`. URL, model, timeout, and provider-specific request parameters belong in the YAML file, not in `.env`.
 
 Watchlist variables override `configs/system.yaml`. Use comma, semicolon, newline, or spaces as separators. For example:
 
@@ -211,7 +211,7 @@ On Railway, prefer changing `WATCHLIST_CRYPTO_SYMBOLS` and `WATCHLIST_EQUITY_SYM
 
 If `LLM_CONFIG` or the selected config's API key is missing, the report command still fetches market data, calculates indicators, archives the snapshot, and prints a configuration warning. Once the config and key are present, the same command calls the configured LLM separately for each symbol and sends each protocol report as soon as it is generated.
 
-FineRes follows the native OpenAI Chat Completions request body. The repository's `configs/llms/fineres.yaml` does not include the non-standard `thinking` parameter, so FineRes will not receive it. If you add `reasoning_effort`, FineRes accepts only `low`, `medium`, or `high`.
+OpenOX uses the OpenAI-compatible Chat Completions endpoint configured in `configs/llms/openox.yaml`. The API key is read only from `LLM_API_KEY`; never put it in YAML. The retained FineRes profile remains available by setting `LLM_CONFIG=fineres`.
 
 ## Codex Automation
 

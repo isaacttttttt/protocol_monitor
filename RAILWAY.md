@@ -35,7 +35,7 @@ YAHOO_CHART_BASE=https://query1.finance.yahoo.com/v8/finance/chart
 WATCHLIST_CRYPTO_SYMBOLS=ETHUSDT,BTCUSDT
 WATCHLIST_EQUITY_SYMBOLS=SOXL,MU,CRCL,WDC,ARM,INTU,INFQ
 EQUITY_CONTEXT_SYMBOLS=SPY,QQQ,IWM,DIA,XLK,SMH,SOXX,^VIX,^TNX,DX-Y.NYB
-LLM_CONFIG=fineres
+LLM_CONFIG=openox
 LLM_CONFIG_DIR=configs/llms
 LLM_API_KEY=<your-llm-api-key>
 INDICATOR_ARCHIVE_PATH=data/indicator_snapshots.jsonl
@@ -47,7 +47,7 @@ EQUITY_PROTOCOL_PATH=protocols/equity_smartmoney_protocol_v17.md
 
 `LLM_CONFIG` selects a YAML file under `configs/llms/`. Provider URL, model, timeout, and request parameters live there; only `LLM_API_KEY` remains external.
 
-For FineRes, use `LLM_CONFIG=fineres`. `configs/llms/fineres.yaml` follows the native Chat Completions request body and does not send the non-standard `thinking` parameter. `reasoning_effort`, if added to that YAML, must be `low`, `medium`, or `high`.
+For OpenOX, use `LLM_CONFIG=openox`. `configs/llms/openox.yaml` persists the base URL, `gpt-5.6-sol` model, timeout, and supported request parameters. Set the secret only as `LLM_API_KEY` in Railway Variables. The retained FineRes profile remains available with `LLM_CONFIG=fineres`.
 
 To add or remove monitored symbols, edit `WATCHLIST_CRYPTO_SYMBOLS` and `WATCHLIST_EQUITY_SYMBOLS` in Railway Variables and redeploy/restart the Cron service. No code push is needed.
 
@@ -74,7 +74,7 @@ Without Postgres or a volume, the Feishu report still works, but historical indi
    - Start Command: `python -m app.main report --hours 1 --send`
    - Cron Schedule: `0 2,10,16,22 * * *`
 5. Add the variables above in the service Variables tab.
-6. Deploy and open Logs to confirm the report prints and Feishu receives `SPM 1H FineRes 协议监控报告` or the provider name configured in `configs/llms/<LLM_CONFIG>.yaml`.
+6. Deploy and open Logs to confirm the report prints and Feishu receives an `SPM 1H OpenOX` report or the provider name configured in `configs/llms/<LLM_CONFIG>.yaml`.
 
 ## Manual Test
 

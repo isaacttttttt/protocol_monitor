@@ -3,6 +3,26 @@ from app.llm.openai_compatible import OpenAICompatibleClient
 from app.review.llm_protocol_report import _symbol_messages
 
 
+def test_openox_repository_config_uses_env_secret_and_supported_payload():
+    client = OpenAICompatibleClient(
+        Settings(llm_config="openox", llm_api_key="test-key")
+    )
+
+    payload = client._payload([{"role": "user", "content": "Hello!"}])
+
+    assert client.display_name == "OpenOX"
+    assert client.chat_url == "https://api.openox.tech/v1/chat/completions"
+    assert client.model == "gpt-5.6-sol"
+    assert client.api_key_env == "LLM_API_KEY"
+    assert payload == {
+        "model": "gpt-5.6-sol",
+        "messages": [{"role": "user", "content": "Hello!"}],
+        "max_tokens": 6000,
+        "temperature": 0.2,
+        "reasoning_effort": "medium",
+    }
+
+
 def test_selected_llm_config_uses_yaml_payload_without_thinking(tmp_path):
     config_dir = tmp_path / "llms"
     config_dir.mkdir()
