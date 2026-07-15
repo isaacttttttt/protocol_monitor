@@ -134,7 +134,9 @@ with a UTC candidate schedule for the configured UTC+8 weekday push windows:
 0,30 2,13,14,15,16 * * 0-5
 ```
 
-Railway schedules are UTC. The candidate schedule includes a few no-op runs because one Cron expression cannot represent the six uneven local times exactly. `scheduled-report` checks `Asia/Shanghai`, weekdays, and the configured local-time allowlist before fetching data or sending anything. The actual push times are 10:00, 21:30, 22:00, 22:30, 23:00, and 00:00 UTC+8, Monday through Friday. A Railway Run started outside the known Cron candidate windows is treated as a manual run and executes immediately.
+Railway schedules are UTC. The candidate schedule includes a few no-op runs because one Cron expression cannot represent the six uneven local times exactly. `scheduled-report` checks `Asia/Shanghai`, weekdays, and the configured local-time allowlist before fetching data or sending anything. The actual push times are 10:00, 21:30, 22:00, 22:30, 23:00, and 00:00 UTC+8, Monday through Friday.
+
+Railway does not start a Cron service when its deployment is manually opened outside the schedule. On-demand debugging therefore uses a second, non-Cron service configured by `railway.manual.toml`. Its start command is `python -m app.main report --hours 1 --send`; each deploy or redeploy runs immediately, sends once, and exits. Disable automatic GitHub deployments for this manual service.
 
 See `RAILWAY.md` for the full deployment steps and required Railway variables.
 
@@ -204,8 +206,6 @@ automation:
     timezone: Asia/Shanghai
     weekdays: [1, 2, 3, 4, 5]
     times: ["00:00", "10:00", "21:30", "22:00", "22:30", "23:00"]
-    candidate_times: ["00:00", "00:30", "10:00", "10:30", "21:00", "21:30", "22:00", "22:30", "23:00", "23:30"]
-    manual_run_outside_candidates: true
     grace_minutes: 10
 
 report:

@@ -1,10 +1,10 @@
-# Railway Cron Deployment
+# Railway Scheduled and Manual Deployment
 
-This project can run on Railway as a short-lived Cron Job. Railway starts the container at the configured report times, executes the report command, calculates and archives indicators, calls the configured LLM, sends the Feishu notification, and exits.
+This project uses two short-lived Railway services from the same repository. The scheduled service runs only at configured Cron times. The manual service starts on demand, calculates and archives indicators, calls the configured LLM, sends the Feishu notification, and exits.
 
 ## Railway Settings
 
-The repository includes `railway.toml`:
+The scheduled service uses `railway.toml`:
 
 ```toml
 [build]
@@ -18,8 +18,6 @@ restartPolicyType = "NEVER"
 
 Railway schedules are UTC. This candidate expression covers the required UTC+8 windows, including local Monday 00:00 from a Sunday 16:00 UTC run. Because a single Cron expression cannot encode the six uneven times exactly, `scheduled-report` applies the `Asia/Shanghai` weekday/time allowlist before any market-data fetch, LLM call, or notification. Candidate times such as 10:30, 21:00, and 23:30 UTC+8 exit immediately without sending.
 
-The Railway Run button remains available for manual debugging. An invocation outside the known Cron candidate windows is classified as manual and sends immediately. The logs show `manual report run accepted`. A manual click made during a no-op candidate window may still be skipped; the always-run CLI command is `python -m app.main report --hours 1 --send`.
-
 Actual push times, Monday through Friday in UTC+8:
 
 - 10:00
@@ -28,6 +26,19 @@ Actual push times, Monday through Friday in UTC+8:
 - 22:30
 - 23:00
 - 00:00
+
+The manual service uses `railway.manual.toml`:
+
+```toml
+[build]
+builder = "DOCKERFILE"
+
+[deploy]
+startCommand = "python -m app.main report --hours 1 --send"
+restartPolicyType = "NEVER"
+```
+
+It intentionally has no `cronSchedule`. A deploy or redeploy therefore starts an instance immediately and bypasses the scheduled-time allowlist. Disable GitHub automatic deployments for this service so a normal code push does not send an unintended report.
 
 ## Required Variables
 
@@ -76,17 +87,24 @@ Railway Cron can run this workflow, but durable indicator history should not rel
 
 Without Postgres or a volume, the Feishu report still works, but historical indicator archives may disappear between deployments or containers.
 
-## Dashboard Steps
+## Scheduled Service Setup
 
-1. Push this repository to GitHub.
-2. In Railway, create a new project from the GitHub repo.
-3. Keep the generated service as a Cron Job service.
-4. Confirm the service settings show:
+1. Keep the existing GitHub-backed service for scheduled reports.
+2. In Settings, set **Railway Config File** to `/railway.toml`.
+3. Confirm the service settings show:
    - Start Command: `python -m app.main scheduled-report --hours 1 --send`
    - Cron Schedule: `0,30 2,13,14,15,16 * * 0-5`
-5. Add the variables above in the service Variables tab.
-6. Deploy and open Logs to confirm the report prints and Feishu receives an `SPM 1H OpenOX` report or the provider name configured in `configs/llms/<LLM_CONFIG>.yaml`.
+4. Add the variables above in the service Variables tab.
+5. Deploy. Railway will create an instance only at a scheduled candidate time.
 
-## Manual Test
+## Manual Service Setup
 
-In Railway, use a manual deploy/run to confirm the start command exits after sending the report. If a previous cron run remains `Active`, future runs can be skipped.
+1. Add a second service from the same GitHub repository and name it `spm-manual`.
+2. Copy the scheduled service variables or reference the same shared variables.
+3. In Settings, set **Railway Config File** to the absolute path `/railway.manual.toml`.
+4. Confirm Start Command is `python -m app.main report --hours 1 --send` and **Cron Schedule is empty**.
+5. Disable GitHub automatic deployments for `spm-manual` in its Source settings.
+6. Open the Command Palette and choose **Deploy Latest Commit** for the first run. For later runs, open the latest deployment's three-dot menu and choose **Redeploy**.
+7. Open that deployment's logs. A successful run contains `report run started` and `report run completed`, sends the Feishu report, and ends with status `Completed`.
+
+`No running instances` is expected after the manual command finishes because the process exits successfully. The completed deployment retains its logs. If the screen shows `No running instances` before a manual attempt and no new deployment appears, no deploy/redeploy was triggered.
