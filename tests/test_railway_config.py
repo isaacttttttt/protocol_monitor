@@ -18,9 +18,5 @@ def test_scheduled_service_uses_cron_entrypoint():
     assert deploy["restartPolicyType"] == "NEVER"
 
 
-def test_manual_service_runs_immediately_without_cron_schedule():
-    deploy = _load_config("railway.manual.toml")["deploy"]
-
-    assert deploy["startCommand"] == "python -m app.main report --hours 1 --send"
-    assert "cronSchedule" not in deploy
-    assert deploy["restartPolicyType"] == "NEVER"
+def test_manual_trigger_uses_the_same_cron_service():
+    assert not (PROJECT_ROOT / "railway.manual.toml").exists()

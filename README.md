@@ -132,9 +132,9 @@ with a UTC candidate schedule covering both New York daylight and standard time:
 30 14-20 * * 1-5
 ```
 
-Railway schedules are UTC. `scheduled-report` converts each candidate to `America/New_York` and applies the weekday/time allowlist before fetching data or sending anything. The actual run times are 10:30, 11:30, 12:30, 13:30, 14:30, and 15:30 ET, Monday through Friday. There is no 16:00 close or after-hours push.
+Railway schedules are UTC. `scheduled-report` converts each Cron candidate to `America/New_York` and applies the weekday, XNYS calendar, market-session, and local-time allowlists before fetching data or sending anything. The actual automatic run times are 10:30, 11:30, 12:30, 13:30, 14:30, and 15:30 ET, Monday through Friday. There is no 16:00 close or after-hours push.
 
-Railway does not start a Cron service when its deployment is manually opened outside the schedule. On-demand debugging therefore uses a second, non-Cron service configured by `railway.manual.toml`. Its start command is `python -m app.main report --hours 1 --send`; each deploy or redeploy runs immediately, sends once, and exits. Disable automatic GitHub deployments for this manual service.
+The same Cron service supports Railway's **Run** button. A process started outside the configured UTC Cron candidate windows is classified as manual and sends immediately, including outside market hours. Set `manual_run_outside_candidates: false` to disable that behavior. No second service, HTTP server, deploy, or redeploy is required. Because Railway does not expose whether a process came from Cron or the Run button, a manual click during the first 10 minutes after a Cron candidate time is handled as that candidate; click outside those short windows for an unambiguous manual run. The same limitation means an automatic Cron process delayed by more than 10 minutes can be classified as manual, so review the start-time log if Railway reports a delayed deployment.
 
 See `RAILWAY.md` for the full deployment steps and required Railway variables.
 
@@ -204,6 +204,10 @@ automation:
     timezone: America/New_York
     weekdays: [1, 2, 3, 4, 5]
     times: ["10:30", "11:30", "12:30", "13:30", "14:30", "15:30"]
+    candidate_timezone: UTC
+    candidate_weekdays: [1, 2, 3, 4, 5]
+    candidate_times: ["14:30", "15:30", "16:30", "17:30", "18:30", "19:30", "20:30"]
+    manual_run_outside_candidates: true
     grace_minutes: 10
 
 report:

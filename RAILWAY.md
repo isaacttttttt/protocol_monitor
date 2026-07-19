@@ -1,10 +1,12 @@
-# Railway Scheduled and Manual Deployment
+# Railway Scheduled Reports and Manual Run
 
-This project uses two short-lived Railway services from the same repository. The scheduled service runs only at configured Cron times. The manual service starts on demand, calculates and archives indicators, calls the configured LLM, sends the Feishu notification, and exits.
+This branch uses one short-lived Railway Cron service for both automatic reports and manual debugging. Automatic Cron candidates are filtered through the configured New York schedule and XNYS calendar. Clicking Railway's **Run** button outside a Cron candidate window is classified as manual, sends one report immediately, and exits.
+
+No permanent HTTP service, second Railway service, deploy, or redeploy is required.
 
 ## Railway Settings
 
-The scheduled service uses `railway.toml`:
+The service uses `railway.toml`:
 
 ```toml
 [build]
@@ -16,35 +18,52 @@ cronSchedule = "30 14-20 * * 1-5"
 restartPolicyType = "NEVER"
 ```
 
-Railway schedules are UTC. This candidate expression covers both EDT and EST. `scheduled-report` converts each candidate to `America/New_York` and applies the configured weekday/time allowlist before any market-data fetch, LLM call, or notification.
+Railway schedules are UTC. The candidate expression covers both EDT and EST. For automatic candidates, `scheduled-report` converts the current time to `America/New_York` and checks:
 
-Actual run times, Monday through Friday in New York time:
+- Monday through Friday
+- XNYS trading holidays and half days
+- The live XNYS market session
+- 10:30, 11:30, 12:30, 13:30, 14:30, or 15:30 New York time
 
-- 10:30
-- 11:30
-- 12:30
-- 13:30
-- 14:30
-- 15:30
+There is no automatic 16:00 close or after-hours push.
 
-There is no 16:00 close or after-hours push.
+## How the Run Button Is Detected
 
-The manual service uses `railway.manual.toml`:
+Railway does not provide the process with a reliable flag that distinguishes Cron from a click on **Run**. The application therefore mirrors the Cron candidates in `configs/system.yaml`:
 
-```toml
-[build]
-builder = "DOCKERFILE"
-
-[deploy]
-startCommand = "python -m app.main report --hours 1 --send"
-restartPolicyType = "NEVER"
+```yaml
+automation:
+  report_schedule:
+    enabled: true
+    timezone: America/New_York
+    weekdays: [1, 2, 3, 4, 5]
+    times: ["10:30", "11:30", "12:30", "13:30", "14:30", "15:30"]
+    candidate_timezone: UTC
+    candidate_weekdays: [1, 2, 3, 4, 5]
+    candidate_times: ["14:30", "15:30", "16:30", "17:30", "18:30", "19:30", "20:30"]
+    manual_run_outside_candidates: true
+    grace_minutes: 10
 ```
 
-It intentionally has no `cronSchedule`. A deploy or redeploy therefore starts an instance immediately and bypasses the scheduled-time allowlist. Disable GitHub automatic deployments for this service so a normal code push does not send an unintended report.
+The behavior is:
+
+- A weekday start from 14:30 through 20:30 UTC, within the 10-minute grace period, is treated as an automatic Cron candidate and must pass all market checks.
+- Any other start is treated as a manual Run and sends immediately, including weekends, holidays, pre-market, and after-hours.
+- Set `manual_run_outside_candidates: false` to disable manual acceptance.
+
+A manual click during the first 10 minutes after one of the UTC candidate times cannot be distinguished from Cron and is handled as an automatic candidate. Click outside those windows for an unambiguous manual run. The logs then contain:
+
+```text
+manual report run accepted
+report run started
+report run completed
+```
+
+If Railway starts an automatic candidate more than 10 minutes late, the same time-based inference can classify it as manual. Check the `local_time` log when diagnosing a delayed deployment; this is an inherent limitation because Railway does not provide a Cron-versus-Run marker to the process.
 
 ## Required Variables
 
-Set these in Railway service variables:
+Set these in the Railway service Variables tab:
 
 ```env
 APP_ENV=railway
@@ -67,46 +86,28 @@ CRYPTO_PROTOCOL_PATH=protocols/crypto_smartmoney_protocol_v16.md
 EQUITY_PROTOCOL_PATH=protocols/equity_smartmoney_protocol_v17.md
 ```
 
-`TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` can stay empty unless you also want Telegram.
+`TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` can stay empty unless Telegram is enabled.
 
-`LLM_CONFIG` selects a YAML file under `configs/llms/`. Provider URL, model, timeout, and request parameters live there; only `LLM_API_KEY` remains external.
+`LLM_CONFIG=openox` selects `configs/llms/openox.yaml`. Keep `LLM_API_KEY` only in Railway Variables.
 
-For OpenOX, use `LLM_CONFIG=openox`. `configs/llms/openox.yaml` persists the base URL, `gpt-5.6-sol` model, timeout, and supported request parameters. Set the secret only as `LLM_API_KEY` in Railway Variables. The retained FineRes profile remains available with `LLM_CONFIG=fineres`.
+## Railway Setup
 
-To add or remove monitored symbols, edit `WATCHLIST_CRYPTO_SYMBOLS` and `WATCHLIST_EQUITY_SYMBOLS` in Railway Variables and redeploy/restart the Cron service. No code push is needed.
+1. Open the GitHub-backed Railway service.
+2. Set its source branch to `codex/manual-trigger`.
+3. In Settings, set **Railway Config File** to `/railway.toml`.
+4. Remove any Start Command or Cron override left from the old `railway.manual.toml` setup.
+5. Confirm:
+   - Start Command: `python -m app.main scheduled-report --hours 1 --send`
+   - Cron Schedule: `30 14-20 * * 1-5`
+6. Add the required variables and deploy the branch once.
 
-Each qualified 1H/4H/DAY opportunity is sent as a Feishu execution card. If no new opportunity passes the structured contract, the run sends only one short summary. The same high-timeframe opportunity is not sent twice.
+After that initial deployment:
 
-Crypto reports try Binance USD-M first. If the Railway region receives Binance `HTTP 451`, the report automatically falls back to OKX public swap data, then Yahoo spot crypto data.
+- Automatic runs are started by Cron.
+- For an immediate manual report, open the same service and click **Run**.
+- Do not use **Deploy** or **Redeploy** merely to trigger a report.
+- The process exits after each report, so `No running instances` between runs is normal.
 
 ## Persistence
 
-Railway Cron can run this workflow, but durable indicator history should not rely on the container's local filesystem. Recommended setup:
-
-- Add Railway Postgres.
-- Set `DATABASE_URL` to the Postgres connection string.
-- Keep `INDICATOR_ARCHIVE_PATH` for local/dev convenience only, or attach a persistent volume if you explicitly want file archives.
-
-Without Postgres or a volume, the Feishu report still works, but historical indicator archives may disappear between deployments or containers.
-
-## Scheduled Service Setup
-
-1. Keep the existing GitHub-backed service for scheduled reports.
-2. In Settings, set **Railway Config File** to `/railway.toml`.
-3. Confirm the service settings show:
-   - Start Command: `python -m app.main scheduled-report --hours 1 --send`
-   - Cron Schedule: `30 14-20 * * 1-5`
-4. Add the variables above in the service Variables tab.
-5. Deploy. Railway will create an instance only at a scheduled candidate time.
-
-## Manual Service Setup
-
-1. Add a second service from the same GitHub repository and name it `spm-manual`.
-2. Copy the scheduled service variables or reference the same shared variables.
-3. In Settings, set **Railway Config File** to the absolute path `/railway.manual.toml`.
-4. Confirm Start Command is `python -m app.main report --hours 1 --send` and **Cron Schedule is empty**.
-5. Disable GitHub automatic deployments for `spm-manual` in its Source settings.
-6. Open the Command Palette and choose **Deploy Latest Commit** for the first run. For later runs, open the latest deployment's three-dot menu and choose **Redeploy**.
-7. Open that deployment's logs. A successful run contains `report run started` and `report run completed`, sends the Feishu report, and ends with status `Completed`.
-
-`No running instances` is expected after the manual command finishes because the process exits successfully. The completed deployment retains its logs. If the screen shows `No running instances` before a manual attempt and no new deployment appears, no deploy/redeploy was triggered.
+The report works with SQLite, but a short-lived Railway container does not provide durable local storage. For persistent indicator history, use Railway Postgres for `DATABASE_URL` or attach a volume.
