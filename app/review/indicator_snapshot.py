@@ -4,7 +4,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 import json
 import math
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from statistics import median, pstdev
 from typing import Any, Iterator
@@ -12,6 +12,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from app.config.settings import Settings
+from app.market.xnys_calendar import xnys_session
 from app.review.protocol_analysis import (
     _aggregate_candles,
     _brief_error,
@@ -23,7 +24,6 @@ from app.review.protocol_analysis import (
     _yahoo_chart,
 )
 from app.review.equity_sectors import load_equity_sector_map, required_equity_context_symbols
-from app.strategies.equity_orb_retest import OrbRetestConfig, evaluate_orb_retest
 
 DEFAULT_CRYPTO_SYMBOLS = ["ETHUSDT", "BTCUSDT"]
 DEFAULT_EQUITY_SYMBOLS = ["SOXL", "MU", "CRCL", "WDC", "ARM", "INTU", "INFQ"]
@@ -73,7 +73,6 @@ def build_indicator_snapshot(system_config: dict[str, Any], settings: Settings |
                     spy_daily,
                     sector_map.get(str(symbol).upper()),
                     equity_context.get("daily_candles", {}),
-                    system_config.get("report", {}).get("orb_retest", {}),
                 ),
                 str(symbol),
                 "equity",
@@ -115,7 +114,6 @@ def iter_indicator_snapshot_events(system_config: dict[str, Any], settings: Sett
                     spy_daily,
                     sector_map.get(str(symbol).upper()),
                     equity_context.get("daily_candles", {}),
-                    system_config.get("report", {}).get("orb_retest", {}),
                 ),
                 str(symbol),
                 "equity",
@@ -152,14 +150,17 @@ def compact_symbol_snapshot_for_llm(
 
 def _snapshot_base(watchlist: dict[str, Any]) -> dict[str, Any]:
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "run_id": datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S") + "-" + uuid4().hex[:8],
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "mode": "indicator_snapshot_only",
         "factor_contract": {
             "code_role": "observations_factors_and_candidate_setups_only",
-            "llm_role": "final_protocol_scores_micro_macro_judgment_and_trade_decision",
-            "warning": "Candidate setup fields are evidence, not confirmed triggers.",
+            "llm_role": "final_1h_4h_day_protocol_judgment_and_trade_decision",
+            "warning": (
+                "Only closed 1H/4H/DAY indicators are strategy evidence. "
+                "The LLM decision must pass the structured execution-plan validator before notification."
+            ),
         },
         "watchlist": watchlist,
         "indicator_quality": {
@@ -338,10 +339,9 @@ def _filter_equity_context_for_target(snapshot: dict[str, Any], item: dict[str, 
 
 
 def _build_crypto_snapshot(symbol: str) -> dict[str, Any]:
-    data = _load_crypto_market_data(symbol)
+    data = _load_crypto_market_data(symbol, include_micro=False)
     timeframes = {
-        "5m": _indicator_pack(data.k5, "5m", market="crypto"),
-        "15m": _indicator_pack(data.k15, "15m", market="crypto"),
+        "1h": _indicator_pack(data.k1, "1h", market="crypto"),
         "4h": _indicator_pack(data.k4, "4h", market="crypto"),
         "1d": _indicator_pack(data.k1d, "1d", market="crypto"),
     }
@@ -366,8 +366,8 @@ def _build_crypto_snapshot(symbol: str) -> dict[str, Any]:
         "change_pct": data.change_pct,
         "high_24h": data.high_24h,
         "low_24h": data.low_24h,
-        "updated_at": data.k15[-1]["time"],
-        "updated_at_local": _format_data_time(data.k15[-1]["time"]),
+        "updated_at": data.k1[-1]["time"],
+        "updated_at_local": _format_data_time(data.k1[-1]["time"]),
         "derivatives": derivatives,
         "timeframes": timeframes,
         "protocol_setup_candidates": _crypto_protocol_candidates(timeframes, derivatives),
@@ -385,62 +385,44 @@ def _crypto_protocol_candidates(
     timeframes: dict[str, dict[str, Any]],
     derivatives: dict[str, Any],
 ) -> dict[str, Any]:
-    m15 = timeframes["15m"]
+    hourly = timeframes["1h"]
     h4 = timeframes["4h"]
     daily = timeframes["1d"]
     return {
-        "contract": "Observed evidence for protocol matching. LLM must decide score, state, direction and trigger.",
-        "micro": {
-            "C-M1_lvn_expansion": {
-                "structure_15m": m15.get("structure"),
-                "structure_4h": h4.get("structure"),
-                "volume_profile_15m": m15.get("volume_profile"),
-                "flow_15m": _compact_flow_evidence(m15),
-                "volatility_transition_15m": m15.get("setup_candidates", {}).get("volatility_transition"),
-            },
-            "C-M2_pullback_or_retest_failure": {
-                "structure_4h": h4.get("structure"),
-                "price_vs_vwap_15m_pct": m15.get("confluence", {}).get("price_vs_vwap_pct"),
-                "price_vs_poc_15m_pct": m15.get("confluence", {}).get("price_vs_volume_poc_pct"),
-                "flow_divergence_15m": m15.get("flow", {}).get("delta_flow", {}).get("divergence"),
-            },
-            "C-M3_liquidity_sweep": {
-                "liquidity_15m": m15.get("liquidity"),
-                "absorption_15m": m15.get("flow", {}).get("delta_flow", {}).get("absorption"),
-                "liquidity_pools_15m": m15.get("smart_money", {}).get("liquidity_pools"),
-            },
-            "C-M4_funding_oi_squeeze": {
-                "funding_rate_pct": derivatives.get("funding_rate_pct"),
-                "open_interest": derivatives.get("open_interest"),
-                "basis_pct": derivatives.get("basis_pct"),
-                "oi_history_available": False,
-                "flow_15m": _compact_flow_evidence(m15),
-            },
+        "contract": (
+            "High-timeframe evidence only. The LLM applies the protocol and returns one validated "
+            "TRADE or NO_TRADE decision; lower-timeframe evidence is intentionally unavailable."
+        ),
+        "timeframes": {
+            "1H": _timeframe_protocol_evidence(hourly),
+            "4H": _timeframe_protocol_evidence(h4),
+            "DAY": _timeframe_protocol_evidence(daily),
         },
-        "macro": {
-            "C-W1_btc_trend_follow": {
-                "daily_structure": daily.get("structure"),
-                "structure_4h": h4.get("structure"),
-                "daily_ema_alignment": daily.get("factors", {}).get("trend", {}).get("ema_alignment"),
-                "funding_rate_pct": derivatives.get("funding_rate_pct"),
-            },
-            "C-W2_alt_beta_rotation": {
-                "daily_structure": daily.get("structure"),
-                "eth_btc_data_available": False,
-                "btc_dominance_data_available": False,
-            },
-            "C-W3_daily_absorption_reversal": {
-                "daily_premium_discount": daily.get("smart_money", {}).get("premium_discount"),
-                "daily_flow_divergence": daily.get("flow", {}).get("delta_flow", {}).get("divergence"),
-                "daily_absorption": daily.get("flow", {}).get("delta_flow", {}).get("absorption"),
-                "structure_4h": h4.get("structure"),
-            },
-            "C-W4_macro_range": {
-                "daily_premium_discount": daily.get("smart_money", {}).get("premium_discount"),
-                "daily_liquidity_pools": daily.get("smart_money", {}).get("liquidity_pools"),
-                "daily_volume_profile": daily.get("volume_profile"),
-            },
+        "derivatives_context": {
+            "funding_rate_pct": derivatives.get("funding_rate_pct"),
+            "open_interest": derivatives.get("open_interest"),
+            "basis_pct": derivatives.get("basis_pct"),
         },
+    }
+
+
+def _timeframe_protocol_evidence(pack: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "last_bar": pack.get("last_bar"),
+        "structure": pack.get("structure"),
+        "trend": pack.get("factors", {}).get("trend"),
+        "rsi14": pack.get("rsi14"),
+        "macd": pack.get("macd"),
+        "atr14": pack.get("atr14"),
+        "relative_volume": pack.get("volume", {}).get("relative_volume"),
+        "flow": _compact_flow_evidence(pack),
+        "smart_money": {
+            "premium_discount": pack.get("smart_money", {}).get("premium_discount"),
+            "liquidity_pools": pack.get("smart_money", {}).get("liquidity_pools"),
+            "fair_value_gaps": pack.get("smart_money", {}).get("fair_value_gaps"),
+            "order_blocks": pack.get("smart_money", {}).get("order_blocks"),
+        },
+        "setup_evidence": pack.get("setup_candidates"),
     }
 
 
@@ -464,26 +446,23 @@ def _build_equity_snapshot(
     spy_daily: list[dict[str, Any]],
     sector_profile: dict[str, Any] | None = None,
     context_daily: dict[str, list[dict[str, Any]]] | None = None,
-    orb_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    daily = _yahoo_chart(symbol, "1d", "1y")
-    hourly = _yahoo_chart(symbol, "60m", "3mo")
-    m15_rows = _yahoo_chart(symbol, "15m", "1mo", include_prepost=True, closed_only=False)
-    m15 = _closed_yahoo_candles(m15_rows, "15m")
-    if not m15:
-        raise ValueError(f"no closed Yahoo chart data for {symbol} 15m")
-    try:
-        weekly = _yahoo_chart(symbol, "1wk", "5y")
-    except Exception:
-        weekly = _aggregate_candles(daily, 5)
+    daily = _yahoo_chart(symbol, "1d", "2y")
+    hourly_rows = _yahoo_chart(symbol, "60m", "1y", closed_only=False)
+    hourly = _closed_yahoo_candles(hourly_rows, "60m")
+    if not hourly:
+        raise ValueError(f"no closed Yahoo chart data for {symbol} 1h")
+    four_hour = _aggregate_equity_4h(hourly)
+    if not four_hour:
+        raise ValueError(f"no complete Yahoo chart data for {symbol} 4h")
 
-    latest_intraday = m15_rows[-1]
+    latest_intraday = hourly_rows[-1]
     last_daily = daily[-1]
-    session_date = _latest_local_date(m15_rows)
+    session_date = _latest_local_date(hourly_rows)
     previous_close = _previous_daily_close(daily, session_date)
     price = float(latest_intraday["close"])
     change_pct = ((price / previous_close) - 1) * 100 if previous_close else None
-    session_open = _regular_session_open(m15, session_date)
+    session_open = _regular_session_open(hourly_rows, session_date)
     gap_pct = ((session_open / previous_close) - 1) * 100 if session_open is not None and previous_close else None
     rs_vs_spy = _relative_strength_vs_spy(daily, spy_daily, 20)
     profile = sector_profile or {
@@ -509,14 +488,10 @@ def _build_equity_snapshot(
         if benchmark in available_context
     }
     relative_factors = _relative_market_factors(daily, benchmark_candles)
-    opening_range = _opening_range(m15)
-    premarket = _premarket_summary(m15)
-    session_vwap = _session_vwap(m15, session_date)
     timeframes = {
-        "15m": _indicator_pack(m15, "15m", market="equity"),
-        "60m": _indicator_pack(hourly, "60m", market="equity"),
+        "1h": _indicator_pack(hourly, "1h", market="equity"),
+        "4h": _indicator_pack(four_hour, "4h", market="equity"),
         "1d": _indicator_pack(daily, "1d", market="equity"),
-        "1wk": _indicator_pack(weekly, "1wk", market="equity"),
     }
     sector_context = {
         "primary_benchmark": profile.get("primary_benchmark"),
@@ -526,17 +501,6 @@ def _build_equity_snapshot(
         "peer_breadth": _peer_breadth(available_context, profile.get("peers", [])),
         "leveraged_etf_risk": _leveraged_etf_risk(daily, profile, available_context),
     }
-    primary_relative = relative_factors.get("benchmarks", {}).get(
-        str(profile.get("primary_benchmark") or ""),
-        {},
-    )
-    deterministic_orb = evaluate_orb_retest(
-        m15,
-        previous_close,
-        sector_relative_5_pct=primary_relative.get("relative_return_5_pct"),
-        config=OrbRetestConfig(**(orb_config or {})),
-    )
-
     return {
         "symbol": symbol,
         "market": "equity",
@@ -547,23 +511,16 @@ def _build_equity_snapshot(
         "last_daily_close": last_daily["close"],
         "gap_pct": gap_pct,
         "regular_session_open": session_open,
-        "premarket": premarket,
-        "regular_session_vwap": session_vwap,
-        "deterministic_orb_retest": deterministic_orb,
         "updated_at": latest_intraday["time"],
         "updated_at_local": _format_data_time(latest_intraday["time"]),
-        "opening_range_30m": opening_range,
         "relative_strength_vs_spy_20d_pct": rs_vs_spy,
         "classification": profile,
         "sector_context": sector_context,
         "timeframes": timeframes,
         "protocol_setup_candidates": _equity_protocol_candidates(
             price,
-            opening_range,
             timeframes,
             sector_context,
-            premarket=premarket,
-            session_vwap=session_vwap,
         ),
         "unavailable": [
             "real_cvd",
@@ -580,8 +537,9 @@ def _build_equity_context(symbols: list[str]) -> dict[str, Any]:
     daily_candles: dict[str, list[dict[str, Any]]] = {}
     for symbol in symbols:
         try:
-            daily = _yahoo_chart(symbol, "1d", "1y")
-            hourly = _yahoo_chart(symbol, "60m", "3mo")
+            daily = _yahoo_chart(symbol, "1d", "2y")
+            hourly = _yahoo_chart(symbol, "60m", "1y")
+            four_hour = _aggregate_equity_4h(hourly)
             if symbol == "SPY":
                 spy_daily = daily
             daily_candles[symbol] = daily
@@ -590,8 +548,9 @@ def _build_equity_context(symbols: list[str]) -> dict[str, Any]:
                 "context_role": _equity_context_role(symbol),
                 "price": daily[-1]["close"],
                 "change_pct": _return_pct(daily[-2]["close"], daily[-1]["close"]) if len(daily) > 1 else None,
-                "daily": _indicator_pack(daily, "1d", include_profile=False, market="equity"),
-                "60m": _indicator_pack(hourly, "60m", include_profile=False, market="equity"),
+                "1h": _indicator_pack(hourly, "1h", include_profile=False, market="equity"),
+                "4h": _indicator_pack(four_hour, "4h", include_profile=False, market="equity"),
+                "1d": _indicator_pack(daily, "1d", include_profile=False, market="equity"),
             }
         except Exception as exc:
             context[symbol] = {"status": "error", "error": _brief_error(exc)}
@@ -608,89 +567,80 @@ def _equity_context_role(symbol: str) -> str:
 
 def _equity_protocol_candidates(
     price: float,
-    opening_range: dict[str, Any] | None,
     timeframes: dict[str, dict[str, Any]],
     sector_context: dict[str, Any],
-    *,
-    premarket: dict[str, Any] | None = None,
-    session_vwap: float | None = None,
 ) -> dict[str, Any]:
-    m15 = timeframes["15m"]
-    hourly = timeframes["60m"]
+    hourly = timeframes["1h"]
+    h4 = timeframes["4h"]
     daily = timeframes["1d"]
-    weekly = timeframes["1wk"]
     primary = str(sector_context.get("primary_benchmark") or "")
     primary_relative = (
         sector_context.get("relative_factors", {}).get("benchmarks", {}).get(primary, {})
     )
     peer_breadth = sector_context.get("peer_breadth", {})
     return {
-        "contract": "Observed evidence for protocol matching. LLM must decide score, state, direction and trigger.",
-        "micro": {
-            "M-E1_sector_rotation_trend": {
-                "target_15m_structure": m15.get("structure"),
-                "target_60m_structure": hourly.get("structure"),
-                "target_vs_sector_5_bar_pct": primary_relative.get("relative_return_5_pct"),
-                "peer_positive_ratio_20": peer_breadth.get("positive_ratio"),
-                "price_vs_vwap_pct": m15.get("confluence", {}).get("price_vs_vwap_pct"),
-            },
-            "M-E2_liquidity_sweep": {
-                "target_15m_liquidity": m15.get("liquidity"),
-                "target_15m_flow_divergence": m15.get("flow", {}).get("delta_flow", {}).get("divergence"),
-                "target_15m_absorption": m15.get("flow", {}).get("delta_flow", {}).get("absorption"),
-            },
-            "M-E3_opening_range_or_news": {
-                "opening_range_30m": opening_range,
-                "opening_range_complete": bool(opening_range and opening_range.get("complete")),
-                "premarket": premarket,
-                "session_vwap": session_vwap,
-                "price": price,
-                "price_above_orh": bool(
-                    opening_range and opening_range.get("complete") and price > float(opening_range["high"])
-                ),
-                "price_below_orl": bool(
-                    opening_range and opening_range.get("complete") and price < float(opening_range["low"])
-                ),
-                "price_above_session_vwap": bool(session_vwap is not None and price > session_vwap),
-                "price_below_session_vwap": bool(session_vwap is not None and price < session_vwap),
-                "gap_pct": daily.get("factors", {}).get("price_volume", {}).get("gap_pct"),
-                "event_data_available": False,
-            },
-            "M-E4_breakdown_pullback_short": {
-                "daily_structure": daily.get("structure"),
-                "hourly_structure": hourly.get("structure"),
-                "target_15m_structure": m15.get("structure"),
-                "price_vs_vwap_pct": m15.get("confluence", {}).get("price_vs_vwap_pct"),
-            },
+        "contract": (
+            "High-timeframe evidence only. The LLM applies the protocol and returns one validated "
+            "TRADE or NO_TRADE decision; opening-range and lower-timeframe evidence is intentionally unavailable."
+        ),
+        "timeframes": {
+            "1H": _timeframe_protocol_evidence(hourly),
+            "4H": _timeframe_protocol_evidence(h4),
+            "DAY": _timeframe_protocol_evidence(daily),
         },
-        "macro": {
-            "W-E1_weekly_sector_trend": {
-                "weekly_structure": weekly.get("structure"),
-                "daily_structure": daily.get("structure"),
-                "weekly_ema_alignment": weekly.get("factors", {}).get("trend", {}).get("ema_alignment"),
-                "target_vs_sector_20_bar_pct": primary_relative.get("relative_return_20_pct"),
-                "peer_positive_ratio_20": peer_breadth.get("positive_ratio"),
-            },
-            "W-E2_event_revaluation": {
-                "weekly_structure": weekly.get("structure"),
-                "gap_pct": daily.get("factors", {}).get("price_volume", {}).get("gap_pct"),
-                "event_fundamental_data_available": False,
-            },
-            "W-E3_valuation_repair": {
-                "weekly_drawdown_pct": weekly.get("factors", {}).get("volatility", {}).get(
-                    "current_drawdown_from_60_bar_peak_pct"
-                ),
-                "daily_range_position_60": daily.get("factors", {}).get("price_volume", {}).get(
-                    "range_position_60"
-                ),
-                "daily_structure": daily.get("structure"),
-            },
-            "W-E4_defensive_rotation": {
-                "requires_index_and_external_context": ["SPY", "QQQ", "^VIX"],
-                "target_sector": primary,
-            },
+        "relative_context": {
+            "primary_benchmark": primary,
+            "target_vs_primary_5d_pct": primary_relative.get("relative_return_5_pct"),
+            "target_vs_primary_20d_pct": primary_relative.get("relative_return_20_pct"),
+            "peer_positive_ratio_20d": peer_breadth.get("positive_ratio"),
+            "current_price": price,
         },
     }
+
+
+def _aggregate_equity_4h(
+    candles: list[dict[str, Any]],
+    *,
+    as_of: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Aggregate XNYS hourly rows without crossing sessions or dropping completed tails."""
+    cutoff = as_of or datetime.now(timezone.utc)
+    if cutoff.tzinfo is None:
+        raise ValueError("equity aggregation as_of must be timezone-aware")
+    market_cutoff = cutoff.astimezone(NEW_YORK_TZ)
+
+    by_session: dict[date, dict[datetime, dict[str, Any]]] = {}
+    for candle in candles:
+        local_time = _local_datetime(candle)
+        session = xnys_session(local_time.date())
+        if session is None or not session.open_time <= local_time < session.close_time:
+            continue
+        by_session.setdefault(local_time.date(), {})[local_time] = candle
+
+    aggregated: list[dict[str, Any]] = []
+    for session_date in sorted(by_session):
+        session = xnys_session(session_date)
+        if session is None:
+            continue
+        rows = by_session[session_date]
+        expected_starts: list[datetime] = []
+        expected_time = session.open_time
+        while expected_time < session.close_time:
+            expected_starts.append(expected_time)
+            expected_time += timedelta(hours=1)
+
+        session_complete = market_cutoff >= session.close_time
+        for index in range(0, len(expected_starts), 4):
+            bucket_times = expected_starts[index : index + 4]
+            if len(bucket_times) < 4 and not session_complete:
+                continue
+            if any(expected not in rows for expected in bucket_times):
+                continue
+            chunk = [rows[expected] for expected in bucket_times]
+            bar = _aggregate_candles(chunk, len(chunk))[0]
+            bar["time"] = chunk[0]["time"]
+            aggregated.append(bar)
+    return aggregated
 
 
 def _configured_symbols(env_value: str, yaml_value: Any, default: list[str]) -> tuple[list[str], str]:

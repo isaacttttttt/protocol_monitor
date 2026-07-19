@@ -221,6 +221,19 @@ class SignalRepository:
             await session.execute(insert(notifications).values(**values))
             await session.commit()
 
+    async def was_notification_sent(self, signal_id: str, channel: str) -> bool:
+        async with self.session_factory() as session:
+            count = await session.scalar(
+                select(func.count())
+                .select_from(notifications)
+                .where(
+                    notifications.c.signal_id == signal_id,
+                    notifications.c.channel == channel,
+                    notifications.c.status == "SENT",
+                )
+            )
+            return bool(count)
+
 
 class IndicatorRepository:
     def __init__(self, session_factory: async_sessionmaker) -> None:

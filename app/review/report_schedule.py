@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from datetime import datetime, time
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from app.market.xnys_calendar import NEW_YORK_TZ, xnys_session
+
 
 @dataclass(frozen=True)
 class ScheduledReportDecision:
@@ -22,7 +24,7 @@ def evaluate_report_schedule(
         raise ValueError("scheduled report time must be timezone-aware")
 
     schedule = automation_config.get("report_schedule") or {}
-    timezone_name = str(schedule.get("timezone") or "Asia/Shanghai")
+    timezone_name = str(schedule.get("timezone") or "America/New_York")
     try:
         local_timezone = ZoneInfo(timezone_name)
     except ZoneInfoNotFoundError as exc:
@@ -35,6 +37,13 @@ def evaluate_report_schedule(
     weekdays = _weekdays(schedule.get("weekdays", [1, 2, 3, 4, 5]))
     if local_now.isoweekday() not in weekdays:
         return ScheduledReportDecision(False, local_now, None, "outside configured weekdays")
+
+    market_now = now.astimezone(NEW_YORK_TZ)
+    market_session = xnys_session(market_now.date())
+    if market_session is None:
+        return ScheduledReportDecision(False, local_now, None, "XNYS market closed")
+    if not market_session.open_time <= market_now < market_session.close_time:
+        return ScheduledReportDecision(False, local_now, None, "outside XNYS market session")
 
     grace_minutes = int(schedule.get("grace_minutes", 10))
     if grace_minutes < 0 or grace_minutes >= 30:

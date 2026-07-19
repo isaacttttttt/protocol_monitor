@@ -1,5 +1,5 @@
 id: ETH_C_M2_PULLBACK_FAIL_SHORT_V1
-enabled: true
+enabled: false
 exchange: BINANCE
 symbol: ETHUSDT
 book: Micro

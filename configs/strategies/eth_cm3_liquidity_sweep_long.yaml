@@ -1,5 +1,5 @@
 id: ETH_C_M3_LIQUIDITY_SWEEP_LONG_V1
-enabled: true
+enabled: false
 exchange: BINANCE
 symbol: ETHUSDT
 book: Micro

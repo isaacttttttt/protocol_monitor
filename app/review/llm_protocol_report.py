@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-import re
+import hashlib
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime
@@ -11,6 +11,11 @@ from typing import Any
 
 from app.config.settings import Settings
 from app.llm.openai_compatible import OpenAICompatibleClient
+from app.review.llm_decision import (
+    DecisionValidationError,
+    LLMDecision,
+    validate_decision,
+)
 from app.review.indicator_snapshot import (
     archive_indicator_snapshot,
     build_indicator_snapshot,
@@ -28,21 +33,25 @@ class LlmProtocolReportPart:
     symbol: str
     market: str
     has_trade_opportunity: bool = False
+    decision: dict[str, Any] | None = None
+    opportunity_id: str | None = None
 
 
 def _strategy_trader_system_prompt(scope: str) -> str:
     return (
         f"你是 SmartMoney Protocol Monitor 的{scope}。"
         "你的定位是资深策略交易员，长期专注美股标的、ETF、加密货币与跨市场风险传导。"
-        "你擅长识别趋势切换、流动性扫荡、动能衰竭、风险偏好迁移，并把复杂指标压缩成可执行下注计划。"
-        "你的工作方式是概率化推演：先判断市场状态，再评估触发条件、赔率、失效点和仓位折扣。"
+        "你必须按用户提供的完整协议完成最终交易判断。"
+        "代码只负责计算指标和校验输出，不代替你判断协议是否形成机会。"
         "严格只使用用户提供的协议文本与指标快照，不编造缺失数据；缺真实 CVD、Cluster、清算、期权流或 Gamma 数据时要降级置信度。"
-        "代码提供的是基础指标、因子、相对比较和候选形态证据；最终评分与交易判断由你完成。"
-        "For US-equity M-E3 decisions, deterministic_orb_retest is an execution gate: "
-        "only status=TRIGGERED may be labeled TRADE; WAIT/FILTERED states must remain ARMED/WATCH/NONE."
-        "不得把 setup_candidates、BOS proxy、Flow proxy 或单一因子直接当成已触发交易。"
-        "严格风控不等于默认禁止；证据不足但路径清晰时给 WATCH 或 ARMED，只有触发失效、R/R 不足或高周期硬冲突时才禁止。"
-        "输出是监控和交易计划，不代表自动下单；语言要像给交易员的盘前/盘中执行卡片，短、准、可行动。"
+        "本轮运行模式只执行完整协议中的高时间框架部分：1H=执行，4H=结构，DAY=主环境。"
+        "本运行模式明确以 DAY 为最高环境；协议原文中的 Micro、5M/15M、1W/周线或其他范围外周期条款在本轮不执行；"
+        "这些周期的数据缺失不得被当作本轮缺失数据、否决理由或 DATA_ERROR。"
+        "本轮高周期 JSON 合同覆盖原协议中的旧 Markdown、Micro 双账本和旧输出格式，但判断逻辑、风控原则与结构依据仍必须沿用完整协议。"
+        "输出只能是协议规定的单个 JSON 对象，不得输出 Markdown 或额外说明。"
+        "TRADE 必须给出可执行的时机、条件、Entry、SL、TP、R/R、失效和三条数字依据；"
+        "NO_TRADE 必须明确说明本轮不做的硬原因，不得使用模糊观察性措辞。"
+        "输出是监控和交易计划，不代表自动下单。"
     )
 
 
@@ -86,39 +95,45 @@ async def stream_llm_protocol_report_parts(
 ) -> AsyncIterator[LlmProtocolReportPart]:
     client = OpenAICompatibleClient(settings)
     title = f"SPM {hours}H {client.display_name} 协议监控报告"
-    if not client.is_configured:
-        snapshot = build_indicator_snapshot(system_config, settings)
-        snapshot["monitor_window"] = _monitor_window(hours, kline_count, strategy_count, recent_signals)
-        await archive_indicator_snapshot(snapshot, settings, archive_repository)
-        yield LlmProtocolReportPart(title=title, body=_missing_key_body(settings, snapshot, client), symbol="SPM", market="overview")
-        return
-
+    protocol_error: Exception | None = None
+    protocols: dict[str, str] = {}
     try:
         protocols = {
             "crypto": _read_protocol(settings.crypto_protocol_path),
             "equity": _read_protocol(settings.equity_protocol_path),
         }
     except Exception as exc:
-        snapshot = build_indicator_snapshot(system_config, settings)
-        snapshot["monitor_window"] = _monitor_window(hours, kline_count, strategy_count, recent_signals)
-        await archive_indicator_snapshot(snapshot, settings, archive_repository)
-        yield LlmProtocolReportPart(title=title, body=_llm_error_body(exc, snapshot), symbol="SPM", market="overview")
-        return
+        protocol_error = exc
 
     final_snapshot: dict[str, Any] | None = None
     monitor_window = _monitor_window(hours, kline_count, strategy_count, recent_signals)
+    min_rr = float(system_config.get("risk", {}).get("min_rr_to_tp1", 1.5))
+    # The report runs the Macro/high-timeframe side of the complete protocols.
+    # Do not apply the Micro 0.5R cap or a generic score gate here.
+    max_position_r = float(
+        system_config.get("risk", {}).get("max_macro_position_r", 1.5)
+    )
+    repair_attempts = int(
+        system_config.get("report", {}).get("llm_decision", {}).get("repair_attempts", 1)
+    )
     try:
         for event in iter_indicator_snapshot_events(system_config, settings):
             event.snapshot["monitor_window"] = monitor_window
             final_snapshot = event.snapshot
             if event.item.get("status") != "ok":
-                body = _symbol_data_error_body(event.symbol, event.market, event.item)
+                decision = _non_trade_decision(
+                    "DATA_ERROR",
+                    f"{event.symbol} 行情数据不可用",
+                    [str(event.item.get("error") or "行情数据加载失败")],
+                )
+                body = _render_decision_body(event.symbol, event.market, event.item, decision)
                 yield LlmProtocolReportPart(
                     title=_symbol_title(hours, event.symbol, event.market, False),
                     body=body,
                     symbol=event.symbol,
                     market=event.market,
                     has_trade_opportunity=False,
+                    decision=decision,
                 )
                 continue
 
@@ -128,28 +143,70 @@ async def stream_llm_protocol_report_parts(
                 event.item,
                 monitor_window["recent_signals"],
             )
-            try:
-                body = await client.chat(
-                    _symbol_messages(
-                        hours,
-                        event.symbol,
-                        event.market,
-                        payload,
-                        protocols[event.market],
-                    )
+            decision: dict[str, Any]
+            if not client.is_configured:
+                missing = ", ".join(client.missing_config_keys) or "LLM configuration"
+                decision = _non_trade_decision(
+                    "DATA_ERROR",
+                    "LLM 未配置，无法按协议完成判断",
+                    [missing],
                 )
-            except Exception as exc:
-                body = _symbol_llm_error_body(exc, event.symbol, event.market, event.snapshot)
-                has_trade_opportunity = False
+            elif protocol_error is not None:
+                decision = _non_trade_decision(
+                    "DATA_ERROR",
+                    "协议文件不可用，无法完成判断",
+                    [str(protocol_error)],
+                )
             else:
-                has_trade_opportunity = _has_trade_opportunity(body)
+                messages = _symbol_messages(
+                    hours,
+                    event.symbol,
+                    event.market,
+                    payload,
+                    protocols[event.market],
+                )
+                try:
+                    raw = ""
+                    raw = await client.chat(messages)
+                    decision = _validate_symbol_decision(
+                        raw,
+                        event.item,
+                        min_rr,
+                        max_position_r,
+                    )
+                except DecisionValidationError as exc:
+                    decision = await _repair_or_reject_decision(
+                        client,
+                        messages,
+                        raw,
+                        exc,
+                        event.item,
+                        min_rr,
+                        max_position_r,
+                        repair_attempts,
+                    )
+                except Exception as exc:
+                    decision = _non_trade_decision(
+                        "DATA_ERROR",
+                        "LLM 调用失败，未生成协议判断",
+                        [f"{exc.__class__.__name__}: {exc}"],
+                    )
 
+            has_trade_opportunity = decision["status"] == "TRADE"
+            body = _render_decision_body(event.symbol, event.market, event.item, decision)
+            opportunity_id = (
+                _opportunity_id(event.symbol, decision, event.item)
+                if has_trade_opportunity
+                else None
+            )
             yield LlmProtocolReportPart(
                 title=_symbol_title(hours, event.symbol, event.market, has_trade_opportunity),
                 body=body,
                 symbol=event.symbol,
                 market=event.market,
                 has_trade_opportunity=has_trade_opportunity,
+                decision=decision,
+                opportunity_id=opportunity_id,
             )
     finally:
         if final_snapshot is not None:
@@ -198,11 +255,11 @@ def _messages(
 ) -> list[dict[str, str]]:
     system = _strategy_trader_system_prompt("多标的策略交易员")
     user = f"""
-请按照以下协议，对指标快照中的全部标的生成 {hours}H 监控报告。
+请按照以下协议，对指标快照中的全部标的生成 {hours}H 高时间框架监控报告。
 
 硬性输出格式：
 1. 标题使用「SPM {hours}H 监控报告」。
-2. 先给「总览」：市场状态、风险开关、今天最需要等的触发。
+2. 先给「总览」：市场状态、风险开关和明确的做/不做结论。
 3. 每个标的必须使用独立二级标题「## 标的：SYMBOL（市场）」；每个标的只写以下三块：
    - ### 1. 标的基础信息
    - ### 2. 策略分析结论
@@ -232,74 +289,293 @@ def _symbol_messages(
 ) -> list[dict[str, str]]:
     market_label = _market_label(market)
     system = _strategy_trader_system_prompt("单标的策略交易员")
+    schema_text = json.dumps(_decision_json_schema(), ensure_ascii=False, indent=2)
     user = f"""
-请只分析这一个标的：{symbol}（{market_label}），生成 {hours}H 单标的协议报告。
+请只分析 {symbol}（{market_label}）。任务每 {hours} 小时运行一次，但这只是监控频率；
+这不是“每次运行对应一根 1H K 线”的要求；交易机会只从 1H/4H/DAY 的高周期结构中判断。
+1H 只负责执行层，4H 负责结构层，DAY 负责主环境层。
 
-输出必须严格使用以下三段格式，不要合并其他标的，不要增加第四段：
-
-## 标的：{symbol}（{market_label}）
-
-### 1. 标的基础信息
-- 标的：{symbol}
-- 市场：{market_label}
-- 时间：
-- 当前价格：
-- 数据源：
-- 数据质量：
-
-### 2. 策略分析结论
-- 机会等级：TRADE / ARMED / WATCH / NONE / DATA_ERROR
-- 交易机会：是/否
-- 机会类型：Micro / Macro / Both / None
-- Micro 结论：独立给出状态、方向、协议模式与最关键缺口
-- Macro 结论：独立给出 S0-S5、方向、协议模式与最关键缺口
-- Micro/Macro 冲突：一致或冲突；冲突时说明仓位折扣
-- 策略结论：一句话说明当前最重要判断
-- 协议命中：只写命中的 1-2 个协议模式；没有则写未命中
-- 核心证据1：
-- 核心证据2：
-- 核心证据3：
-
-### 3. 推荐执行策略
-- 当前指令：
-- 方向：
-- Entry/触发：
-- SL/失效：
-- TP/RR：
-- 时间止损：
-- 仓位：
-- 预警：
-- 一句话：
-
-执行校准：
-0. 最终评分与交易判断由你完成；代码字段只提供观察、因子和候选形态证据。
-1. TRADE = 当前已满足协议触发，并且有 Entry/SL/TP/RR；可推送为交易机会。
-2. ARMED = 还差 1 个明确确认条件；必须写清楚还差什么、触发后如何执行。
-3. WATCH = 有可观察路径但不足以开仓；不要硬凑 Entry。
-4. NONE = 没有清晰路径；只给分析、关键位和下一轮观察条件。
-5. DATA_ERROR = 数据失败；不做交易判断。
-6. CVD/Delta 若为 proxy 或 taker delta，允许作为二级证据使用，但必须写明置信度折扣。
-7. 对 BTC：默认作为 ETH/加密市场风险过滤器；只有快照本身显示独立机会时才给 TRADE/ARMED。
-8. 对美股：必须考虑 External / Index / Sector / Asset Execution 四层；缺外部/板块数据时降级，不自动禁止所有 Micro 机会。
-9. 必须分别判断 Micro 与 Macro；不得用 15M/60M 反弹替代日线/周线 Macro 修复。
-10. setup_candidates 只表示条件接近或值得检查；不得把候选形态当成已触发。
-11. 对 SOXL 等日重置杠杆 ETF，必须考虑标的波动、路径依赖和相对 SOXX/SMH 的跟踪偏差。
-12. 对 MU 等半导体个股，必须同时对账 SOXX/SMH、同行广度和目标自身结构。
-
-长度控制：
-1. 全文 350-650 中文字；每个字段最多 1 句。
-2. 核心证据只写结论 + 最关键数字，不写推导长段。
-3. 推荐执行策略只保留最优先的一条路径；交易机会为否时，Entry/SL/TP 写“等待/不适用/触发后再定”，不要展开多空两套方案。
-4. 当前指令必须最短、最清楚，优先写“现在做什么 / 等什么 / 什么情况作废”。
-5. 不写教学解释，不复述完整指标清单，不输出原始 JSON。
+最终评分与交易判断由你按照完整协议完成；但本运行模式明确以 DAY 为最高环境。
+原协议中要求 5M/15M、1W/周线、Micro 双账本输出或旧 Markdown 的条款，
+在本轮不是缺失数据，也不是否决理由；本轮只按上述 1H/4H/DAY 高周期模式输出。
 
 【本标的协议】
 {protocol}
 
 【单标的指标快照 JSON】
 {json.dumps(snapshot, ensure_ascii=False, indent=2)}
+
+【本轮 JSON 合同（格式优先级高于协议原文的旧输出格式）】
+只能输出一个 JSON 对象，键集合必须与下面 Schema 完全一致，不得增加或省略键：
+{schema_text}
+
+合同执行规则：
+1. status 只接受 TRADE、NO_TRADE、DATA_ERROR；TRADE 的 timeframe 只接受 1H、4H、DAY。
+2. TRADE 的 entry 是实际保守执行价：NOW=快照 current_price；LONG 的 LIMIT/STOP=entry_zone_high；
+   SHORT 的 LIMIT/STOP=entry_zone_low。entry 必须位于 entry_zone_low/high 内。
+3. 代码会按该实际执行价复算方向价格顺序和 TP1 R/R；实际 R/R >= 1.5，
+   risk_reward 必须填 null（由代码计算），不得估算或伪造。
+4. position_r 遵循完整协议的高周期仓位规则，范围为 0 到 1.5R；不要套用 Micro 的 0.5R 上限。
+5. score 是完整协议的模型评分（0-100），代码只校验范围，不用统一的最低分替代协议判断。
+6. TRADE 必须填写所有非空交易字段、三条互不重复且各含数字的 evidence；rejection_reasons 必须为 []。
+7. NO_TRADE/DATA_ERROR 除 status、summary、rejection_reasons 外，所有交易字段必须为 null，
+   evidence 必须为 []，并给出 1-3 条确定的硬原因；不得输出“等待确认/观察/继续关注”等模糊结论。
 """.strip()
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+def _decision_json_schema() -> dict[str, Any]:
+    """Return the exact wire schema, including every key required by the renderer."""
+
+    schema = LLMDecision.model_json_schema()
+    schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
+    schema["required"] = list(LLMDecision.model_fields)
+    return schema
+
+
+def _validate_symbol_decision(
+    raw: str,
+    item: dict[str, Any],
+    min_rr: float,
+    max_position_r: float,
+) -> dict[str, Any]:
+    return validate_decision(
+        raw,
+        current_price=float(item["price"]),
+        min_rr=min_rr,
+        max_position_r=max_position_r,
+    )
+
+
+async def _repair_or_reject_decision(
+    client: OpenAICompatibleClient,
+    messages: list[dict[str, str]],
+    raw: str,
+    validation_error: DecisionValidationError,
+    item: dict[str, Any],
+    min_rr: float,
+    max_position_r: float,
+    repair_attempts: int,
+) -> dict[str, Any]:
+    errors = list(validation_error.errors)
+    previous = raw
+    for _ in range(max(0, repair_attempts)):
+        try:
+            previous = await client.chat(_repair_messages(messages, previous, errors))
+            return _validate_symbol_decision(
+                previous,
+                item,
+                min_rr,
+                max_position_r,
+            )
+        except DecisionValidationError as exc:
+            errors = list(exc.errors)
+        except Exception as exc:
+            return _non_trade_decision(
+                "DATA_ERROR",
+                "LLM 修正请求失败，未生成合格交易合同",
+                [f"{exc.__class__.__name__}: {exc}"],
+            )
+    return _non_trade_decision(
+        "DATA_ERROR",
+        "LLM 输出未通过交易合同校验",
+        errors[:3] or ["未知合同错误"],
+    )
+
+
+def _repair_messages(
+    messages: list[dict[str, str]],
+    previous: str,
+    errors: list[str],
+) -> list[dict[str, str]]:
+    issues = "\n".join(f"- {error}" for error in errors)
+    return [
+        *messages,
+        {"role": "assistant", "content": previous},
+        {
+            "role": "user",
+            "content": (
+                "上一个 JSON 未通过程序校验。请保持按原协议独立判断，只修正合同错误，"
+                "并重新输出完整 JSON；不要解释。\n校验错误：\n"
+                f"{issues}"
+            ),
+        },
+    ]
+
+
+def _non_trade_decision(
+    status: str,
+    summary: str,
+    reasons: list[str],
+) -> dict[str, Any]:
+    return {
+        "status": status,
+        "timeframe": None,
+        "direction": None,
+        "execution_mode": None,
+        "execution_condition": None,
+        "entry": None,
+        "entry_zone_low": None,
+        "entry_zone_high": None,
+        "stop_loss": None,
+        "tp1": None,
+        "tp2": None,
+        "time_stop": None,
+        "position_r": None,
+        "protocol_setup": None,
+        "score": None,
+        "evidence": [],
+        "invalidation": None,
+        "summary": summary,
+        "rejection_reasons": [str(reason) for reason in reasons if str(reason).strip()],
+        "risk_reward": None,
+    }
+
+
+def _render_decision_body(
+    symbol: str,
+    market: str,
+    item: dict[str, Any],
+    decision: dict[str, Any],
+) -> str:
+    status = str(decision["status"])
+    is_trade = status == "TRADE"
+    market_label = _market_label(market)
+    price = _format_price(item.get("price"))
+    unavailable = ", ".join(str(value) for value in item.get("unavailable", []))
+    data_quality = (
+        "已收盘 1H/4H/DAY 指标完整"
+        if item.get("status") == "ok"
+        else "行情数据不可用"
+    )
+    if unavailable:
+        data_quality = f"{data_quality}；不可用：{unavailable}"
+
+    lines = [
+        f"## 标的：{symbol}（{market_label}）",
+        "",
+        "### 1. 标的基础信息",
+        f"- 标的：{symbol}",
+        f"- 市场：{market_label}",
+        f"- 时间：{item.get('updated_at_local') or item.get('updated_at') or 'N/A'}",
+        f"- 当前价格：{price}",
+        f"- 数据源：{item.get('source') or 'N/A'}",
+        f"- 数据质量：{data_quality}",
+        "",
+        "### 2. 策略分析结论",
+        f"- 机会等级：{status}",
+        f"- 交易机会：{'是' if is_trade else '否'}",
+        f"- 机会类型：{decision.get('timeframe') or 'None'}",
+        f"- 策略结论：{'做' if is_trade else '不做'}；{decision.get('summary') or '无结论'}",
+        f"- 协议命中：{decision.get('protocol_setup') or '未形成合格机会'}",
+    ]
+    evidence = (
+        list(decision.get("evidence") or [])
+        if is_trade
+        else list(decision.get("rejection_reasons") or [])
+    )
+    for index, value in enumerate(evidence[:3], start=1):
+        lines.append(f"- 核心证据{index}：{value}")
+
+    lines.extend(["", "### 3. 推荐执行策略"])
+    if not is_trade:
+        lines.extend(
+            [
+                "- 当前指令：不做",
+                f"- 否决原因：{'；'.join(evidence) or '没有通过协议硬门槛'}",
+                f"- 一句话：{decision.get('summary') or '本轮不做'}",
+            ]
+        )
+        return "\n".join(lines)
+
+    entry = _format_price(decision["entry"])
+    zone_low = _format_price(decision["entry_zone_low"])
+    zone_high = _format_price(decision["entry_zone_high"])
+    tp2 = decision.get("tp2")
+    targets = f"TP1 {_format_price(decision['tp1'])}"
+    if tp2 is not None:
+        targets += f"；TP2 {_format_price(tp2)}"
+    lines.extend(
+        [
+            f"- 当前指令：做；{decision['execution_condition']}",
+            f"- 周期：{decision['timeframe']}",
+            f"- 方向：{decision['direction']}",
+            f"- 执行方式：{decision['execution_mode']}",
+            f"- Entry/触发：{entry}；有效区间 {zone_low}-{zone_high}",
+            f"- SL/失效：{_format_price(decision['stop_loss'])}；{decision['invalidation']}",
+            f"- TP/RR：{targets}；TP1 R/R {float(decision['risk_reward']):.2f}R",
+            f"- 时间止损：{decision['time_stop']}",
+            f"- 仓位：{_format_number(decision['position_r'])}R",
+            f"- 预警：{decision['invalidation']}",
+            f"- 一句话：{decision['summary']}",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _opportunity_id(
+    symbol: str,
+    decision: dict[str, Any],
+    item: dict[str, Any],
+) -> str:
+    timeframe_key = {"1H": "1h", "4H": "4h", "DAY": "1d"}[str(decision["timeframe"])]
+    source_time = (
+        item.get("timeframes", {})
+        .get(timeframe_key, {})
+        .get("last_bar", {})
+        .get("time", item.get("updated_at", "unknown"))
+    )
+    identity = "|".join(
+        [
+            symbol.upper(),
+            str(decision["timeframe"]),
+            str(decision["direction"]),
+            str(source_time),
+            str(decision["execution_mode"]),
+            _canonical_contract_number(decision["entry"]),
+            _canonical_contract_number(decision["entry_zone_low"]),
+            _canonical_contract_number(decision["entry_zone_high"]),
+            _canonical_contract_number(decision["stop_loss"]),
+            _canonical_contract_number(decision["tp1"]),
+            _canonical_contract_number(decision.get("tp2")),
+            _canonical_contract_number(decision["position_r"]),
+        ]
+    )
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
+    return f"SPM-HTF-{symbol.upper()}-{decision['timeframe']}-{decision['direction']}-{digest}"
+
+
+def _canonical_contract_number(value: Any) -> str:
+    """Normalize equivalent numeric spellings for stable opportunity IDs."""
+
+    if value is None:
+        return "null"
+    try:
+        number = Decimal(str(value))
+    except Exception:
+        return str(value)
+    if not number.is_finite():
+        return str(value)
+    if number == 0:
+        return "0"
+    return format(number.normalize(), "f")
+
+
+def _format_price(value: Any) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "N/A"
+    if abs(number) >= 1:
+        return f"{number:.4f}".rstrip("0").rstrip(".")
+    return f"{number:.8f}".rstrip("0").rstrip(".")
+
+
+def _format_number(value: Any) -> str:
+    try:
+        return f"{float(value):.4f}".rstrip("0").rstrip(".")
+    except (TypeError, ValueError):
+        return "N/A"
 
 
 def _monitor_window(hours: int, kline_count: int, strategy_count: int, recent_signals: list[dict[str, Any]]) -> dict[str, Any]:
@@ -307,8 +583,9 @@ def _monitor_window(hours: int, kline_count: int, strategy_count: int, recent_si
         "hours": hours,
         "kline_records_in_db": kline_count,
         "strategy_state_count": strategy_count,
-        "recent_signal_count": len(recent_signals),
-        "recent_signals": _serialize_signals(recent_signals[:10]),
+        "legacy_signal_count_ignored": len(recent_signals),
+        "recent_signals": [],
+        "strategy_scope": ["1H", "4H", "DAY"],
     }
 
 
@@ -413,14 +690,6 @@ def _symbol_llm_error_body(exc: Exception, symbol: str, market: str, snapshot: d
         *summarize_snapshot_for_report(snapshot),
     ]
     return "\n".join(lines)
-
-
-def _has_trade_opportunity(body: str) -> bool:
-    head = body[:1200]
-    return bool(
-        re.search(r"机会等级\s*[：:]\s*TRADE\b", head, flags=re.IGNORECASE)
-        or re.search(r"交易机会\s*[：:]\s*是", head)
-    )
 
 
 def _market_label(market: str) -> str:

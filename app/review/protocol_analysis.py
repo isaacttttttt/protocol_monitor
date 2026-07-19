@@ -41,6 +41,7 @@ class CryptoMarketData:
     market: str
     k15: list[dict[str, Any]]
     k5: list[dict[str, Any]]
+    k1: list[dict[str, Any]]
     k4: list[dict[str, Any]]
     k1d: list[dict[str, Any]]
     last_price: float
@@ -474,7 +475,12 @@ def _binance_get(path: str, params: dict[str, Any]) -> Any:
     return _get_json(base.rstrip("/") + path, params)
 
 
-def _load_crypto_market_data(symbol: str) -> CryptoMarketData:
+def _load_crypto_market_data(
+    symbol: str,
+    *,
+    include_micro: bool = True,
+) -> CryptoMarketData:
+    """Load legacy micro bars only when the caller actually consumes them."""
     errors: list[str] = []
     loaders = [
         ("Binance USD-M", _load_binance_crypto),
@@ -483,18 +489,23 @@ def _load_crypto_market_data(symbol: str) -> CryptoMarketData:
     ]
     for name, loader in loaders:
         try:
-            data = loader(symbol)
+            data = loader(symbol, include_micro=include_micro)
             return replace(data, fallback_notes=tuple(errors)) if errors else data
         except Exception as exc:
             errors.append(f"{name} failed: {_brief_error(exc)}")
     raise RuntimeError("; ".join(errors))
 
 
-def _load_binance_crypto(symbol: str) -> CryptoMarketData:
-    k15 = _binance_klines(symbol, "15m", 120)
-    k5 = _binance_klines(symbol, "5m", 80)
-    k4 = _binance_klines(symbol, "4h", 120)
-    k1d = _binance_klines(symbol, "1d", 120)
+def _load_binance_crypto(
+    symbol: str,
+    *,
+    include_micro: bool = True,
+) -> CryptoMarketData:
+    k15 = _binance_klines(symbol, "15m", 120) if include_micro else []
+    k5 = _binance_klines(symbol, "5m", 80) if include_micro else []
+    k1 = _binance_klines(symbol, "1h", 300)
+    k4 = _binance_klines(symbol, "4h", 300)
+    k1d = _binance_klines(symbol, "1d", 300)
     ticker = _binance_get("/fapi/v1/ticker/24hr", {"symbol": symbol})
     mark = _binance_get("/fapi/v1/premiumIndex", {"symbol": symbol})
     oi = _binance_get("/fapi/v1/openInterest", {"symbol": symbol})
@@ -503,6 +514,7 @@ def _load_binance_crypto(symbol: str) -> CryptoMarketData:
         market="Crypto USD-M",
         k15=k15,
         k5=k5,
+        k1=k1,
         k4=k4,
         k1d=k1d,
         last_price=float(ticker["lastPrice"]),
@@ -515,12 +527,17 @@ def _load_binance_crypto(symbol: str) -> CryptoMarketData:
     )
 
 
-def _load_okx_crypto(symbol: str) -> CryptoMarketData:
+def _load_okx_crypto(
+    symbol: str,
+    *,
+    include_micro: bool = True,
+) -> CryptoMarketData:
     inst_id = _okx_symbol(symbol)
-    k15 = _okx_candles(inst_id, "15m", 120)
-    k5 = _okx_candles(inst_id, "5m", 80)
-    k4 = _okx_candles(inst_id, "4H", 120)
-    k1d = _okx_candles(inst_id, "1D", 120)
+    k15 = _okx_candles(inst_id, "15m", 120) if include_micro else []
+    k5 = _okx_candles(inst_id, "5m", 80) if include_micro else []
+    k1 = _okx_candles(inst_id, "1H", 300)
+    k4 = _okx_candles(inst_id, "4H", 300)
+    k1d = _okx_candles(inst_id, "1D", 300)
     ticker = _okx_get("/api/v5/market/ticker", {"instId": inst_id})["data"][0]
     funding = _okx_get("/api/v5/public/funding-rate", {"instId": inst_id})["data"][0]
     open_interest = _okx_get("/api/v5/public/open-interest", {"instType": "SWAP", "instId": inst_id})["data"][0]
@@ -532,6 +549,7 @@ def _load_okx_crypto(symbol: str) -> CryptoMarketData:
         market="Crypto SWAP",
         k15=k15,
         k5=k5,
+        k1=k1,
         k4=k4,
         k1d=k1d,
         last_price=last,
@@ -544,24 +562,40 @@ def _load_okx_crypto(symbol: str) -> CryptoMarketData:
     )
 
 
-def _load_yahoo_crypto(symbol: str) -> CryptoMarketData:
+def _load_yahoo_crypto(
+    symbol: str,
+    *,
+    include_micro: bool = True,
+) -> CryptoMarketData:
     yahoo_symbol = _yahoo_crypto_symbol(symbol)
-    k15_rows = _yahoo_chart(yahoo_symbol, "15m", "5d", closed_only=False)
-    k15 = _closed_yahoo_candles(k15_rows, "15m")[-120:]
-    if not k15:
-        raise ValueError(f"no closed Yahoo chart data for {yahoo_symbol} 15m")
-    k5 = _yahoo_chart(yahoo_symbol, "5m", "5d")[-80:]
-    hourly = _yahoo_chart(yahoo_symbol, "60m", "3mo")
-    k4 = _aggregate_candles(hourly, 4)[-120:]
-    k1d = _yahoo_chart(yahoo_symbol, "1d", "1y")[-120:]
-    day_window = k15_rows[-96:] if len(k15_rows) >= 96 else k15_rows
-    last = k15_rows[-1]
+    k15_rows: list[dict[str, Any]] = []
+    k15: list[dict[str, Any]] = []
+    k5: list[dict[str, Any]] = []
+    if include_micro:
+        k15_rows = _yahoo_chart(yahoo_symbol, "15m", "5d", closed_only=False)
+        k15 = _closed_yahoo_candles(k15_rows, "15m")[-120:]
+        if not k15:
+            raise ValueError(f"no closed Yahoo chart data for {yahoo_symbol} 15m")
+        k5 = _yahoo_chart(yahoo_symbol, "5m", "5d")[-80:]
+
+    hourly_rows = _yahoo_chart(yahoo_symbol, "60m", "1y", closed_only=False)
+    hourly = _closed_yahoo_candles(hourly_rows, "60m")
+    if not hourly:
+        raise ValueError(f"no closed Yahoo chart data for {yahoo_symbol} 60m")
+    k1 = hourly[-300:]
+    k4 = _aggregate_utc_4h_candles(hourly[-1200:])[-300:]
+    k1d = _yahoo_chart(yahoo_symbol, "1d", "2y")[-300:]
+    quote_rows = k15_rows if include_micro else hourly_rows
+    bars_per_day = 96 if include_micro else 24
+    day_window = quote_rows[-bars_per_day:]
+    last = quote_rows[-1]
     reference = day_window[0]
     return CryptoMarketData(
         source="Yahoo spot",
         market="Crypto Spot",
         k15=k15,
         k5=k5,
+        k1=k1,
         k4=k4,
         k1d=k1d,
         last_price=float(last["close"]),
@@ -753,6 +787,30 @@ def _aggregate_candles(candles: list[dict[str, Any]], size: int) -> list[dict[st
         aggregated.append(item)
     if not aggregated:
         raise ValueError("not enough candles to aggregate")
+    return aggregated
+
+
+def _aggregate_utc_4h_candles(candles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Aggregate complete hourly candles into stable UTC 00/04/08/12/16/20 buckets."""
+    buckets: dict[datetime, dict[datetime, dict[str, Any]]] = {}
+    for candle in candles:
+        candle_time = _parse_utc_time(str(candle["time"]))
+        if candle_time.minute != 0 or candle_time.second != 0 or candle_time.microsecond != 0:
+            continue
+        bucket_start = candle_time.replace(hour=(candle_time.hour // 4) * 4)
+        buckets.setdefault(bucket_start, {})[candle_time] = candle
+
+    aggregated: list[dict[str, Any]] = []
+    for bucket_start in sorted(buckets):
+        expected = [bucket_start + timedelta(hours=offset) for offset in range(4)]
+        rows = buckets[bucket_start]
+        if any(expected_time not in rows for expected_time in expected):
+            continue
+        chunk = [rows[expected_time] for expected_time in expected]
+        aggregated.append(_aggregate_candles(chunk, 4)[0])
+
+    if not aggregated:
+        raise ValueError("not enough complete UTC-aligned hourly candles to aggregate")
     return aggregated
 
 

@@ -112,6 +112,51 @@ def test_build_feishu_payload_supports_three_part_protocol_template():
     assert "WATCH阶段不适用" not in rendered
 
 
+def test_trade_card_shows_high_timeframe_execution_contract():
+    body = """## 标的：MU（US Equity）
+
+### 1. 标的基础信息
+- 标的：MU
+- 市场：US Equity
+- 时间：2026-07-17 15:30 America/New_York
+- 当前价格：152.4
+- 数据源：Yahoo Finance chart
+- 数据质量：已收盘 1H/4H/DAY 指标完整
+
+### 2. 策略分析结论
+- 机会等级：TRADE
+- 交易机会：是
+- 机会类型：4H
+- 策略结论：做；4H趋势突破成立
+- 协议命中：E-H1
+- 核心证据1：DAY EMA20为144.2
+- 核心证据2：4H突破位为150.8
+- 核心证据3：4H量比为1.7
+
+### 3. 推荐执行策略
+- 当前指令：做；当前价保持在151.8-152.8时执行
+- 周期：4H
+- 方向：LONG
+- 执行方式：NOW
+- Entry/触发：152.4；有效区间 151.8-152.8
+- SL/失效：148.4；4H收盘跌破148.4
+- TP/RR：TP1 160.4；TP2 164.4；TP1 R/R 2.00R
+- 时间止损：2根4H K线
+- 仓位：0.25R
+- 预警：4H收盘跌破148.4
+- 一句话：按4H趋势突破做多
+"""
+
+    payload = build_feishu_payload("SPM 1H MU 交易机会报告（US Equity）", body, "监控报告")
+
+    rendered = str(payload["card"]["elements"])
+    assert "4H / LONG" in rendered
+    assert "NOW" in rendered
+    assert "152.4" in rendered
+    assert "2根4H K线" in rendered
+    assert "0.25R" in rendered
+
+
 def test_build_feishu_payload_keeps_plain_reports_as_post():
     payload = build_feishu_payload("SPM", "普通周期报告\n没有协议字段", "监控报告")
 

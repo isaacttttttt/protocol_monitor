@@ -5,6 +5,7 @@ import pytest
 from app.review.protocol_analysis import (
     ProtocolAnalysis,
     _aggregate_candles,
+    _aggregate_utc_4h_candles,
     _binance_klines,
     _brief_error,
     _closed_yahoo_candles,
@@ -37,6 +38,40 @@ def test_aggregate_candles_groups_ohlcv():
     assert _aggregate_candles(candles, 4) == [
         {"time": "t4", "open": 10, "high": 15, "low": 9, "close": 14, "volume": 1000}
     ]
+
+
+def test_yahoo_crypto_4h_aggregation_uses_fixed_utc_buckets():
+    candles = [
+        _yahoo_row(f"2026-01-01T{hour:02d}:00:00+00:00", 100 + hour)
+        for hour in range(1, 9)
+    ]
+
+    aggregated = _aggregate_utc_4h_candles(candles)
+
+    assert aggregated == [
+        {
+            "time": "2026-01-01T07:00:00+00:00",
+            "open": 104,
+            "high": 107,
+            "low": 104,
+            "close": 107,
+            "volume": 4.0,
+        }
+    ]
+
+
+def test_yahoo_crypto_4h_bucket_does_not_move_when_history_start_changes():
+    aligned_history = [
+        _yahoo_row(f"2026-01-01T{hour:02d}:00:00+00:00", 100 + hour)
+        for hour in range(9)
+    ]
+    shifted_history = aligned_history[1:]
+
+    aligned = _aggregate_utc_4h_candles(aligned_history)
+    shifted = _aggregate_utc_4h_candles(shifted_history)
+
+    assert aligned[-1] == shifted[-1]
+    assert shifted[-1]["time"] == "2026-01-01T07:00:00+00:00"
 
 
 def test_brief_error_compacts_common_network_errors():
@@ -112,6 +147,34 @@ def test_yahoo_crypto_uses_forming_bar_for_quote_but_not_indicators(monkeypatch)
 
     assert data.last_price == 999
     assert data.k15[-1]["close"] == 100
+
+
+def test_yahoo_crypto_high_timeframe_mode_does_not_request_micro_data(monkeypatch):
+    calls = []
+    hourly = [
+        _yahoo_row(f"2025-01-01T0{index}:00:00+00:00", 100 + index)
+        for index in range(4)
+    ]
+    forming = _yahoo_row("2099-01-01T04:00:00+00:00", 999)
+
+    def fake_chart(symbol, interval, range_, **kwargs):
+        calls.append(interval)
+        if interval == "60m":
+            return [*hourly, forming]
+        if interval == "1d":
+            return [hourly[0]]
+        raise AssertionError(f"unexpected micro interval request: {interval}")
+
+    monkeypatch.setattr("app.review.protocol_analysis._yahoo_chart", fake_chart)
+
+    data = _load_yahoo_crypto("ETHUSDT", include_micro=False)
+
+    assert calls == ["60m", "1d"]
+    assert data.k5 == []
+    assert data.k15 == []
+    assert [candle["close"] for candle in data.k1] == [100, 101, 102, 103]
+    assert data.k4[-1]["close"] == 103
+    assert data.last_price == 999
 
 
 def _binance_row(open_time: int, close_time: int, close: str) -> list[object]:

@@ -14,7 +14,7 @@ def test_scheduled_service_uses_cron_entrypoint():
     deploy = _load_config("railway.toml")["deploy"]
 
     assert deploy["startCommand"] == "python -m app.main scheduled-report --hours 1 --send"
-    assert deploy["cronSchedule"] == "0,30 2,13,14,15,16 * * 0-5"
+    assert deploy["cronSchedule"] == "30 14-20 * * 1-5"
     assert deploy["restartPolicyType"] == "NEVER"
 
 

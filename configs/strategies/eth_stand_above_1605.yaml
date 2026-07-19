@@ -1,5 +1,5 @@
 id: ETH_STAND_ABOVE_1605_V1
-enabled: true
+enabled: false
 exchange: BINANCE
 symbol: ETHUSDT
 book: Micro

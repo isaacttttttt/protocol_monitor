@@ -116,7 +116,7 @@ def test_llm_config_allowed_params_filters_unknown_values(tmp_path):
     assert client._payload([]) == {"model": "custom-model", "messages": [], "max_tokens": 1000}
 
 
-def test_symbol_prompt_assigns_final_judgment_to_llm_and_separates_books():
+def test_symbol_prompt_assigns_high_timeframe_judgment_to_llm_with_strict_contract():
     messages = _symbol_messages(
         1,
         "MU",
@@ -130,7 +130,10 @@ def test_symbol_prompt_assigns_final_judgment_to_llm_and_separates_books():
     )
 
     prompt = messages[1]["content"]
-    assert "Micro 结论" in prompt
-    assert "Macro 结论" in prompt
-    assert "最终评分与交易判断由你完成" in prompt
-    assert "不得把候选形态当成已触发" in prompt
+    assert "1H、4H、DAY" in prompt
+    assert "最终评分与交易判断由你按照完整协议完成" in prompt
+    assert "只接受 TRADE、NO_TRADE、DATA_ERROR" in prompt
+    assert "实际 R/R >= 1.5" in prompt
+    assert "Micro 结论" not in prompt
+    assert "5M/15M、1W/周线、Micro 双账本输出或旧 Markdown 的条款" in prompt
+    assert "不是缺失数据，也不是否决理由" in prompt

@@ -12,20 +12,22 @@ builder = "DOCKERFILE"
 
 [deploy]
 startCommand = "python -m app.main scheduled-report --hours 1 --send"
-cronSchedule = "0,30 2,13,14,15,16 * * 0-5"
+cronSchedule = "30 14-20 * * 1-5"
 restartPolicyType = "NEVER"
 ```
 
-Railway schedules are UTC. This candidate expression covers the required UTC+8 windows, including local Monday 00:00 from a Sunday 16:00 UTC run. Because a single Cron expression cannot encode the six uneven times exactly, `scheduled-report` applies the `Asia/Shanghai` weekday/time allowlist before any market-data fetch, LLM call, or notification. Candidate times such as 10:30, 21:00, and 23:30 UTC+8 exit immediately without sending.
+Railway schedules are UTC. This candidate expression covers both EDT and EST. `scheduled-report` converts each candidate to `America/New_York` and applies the configured weekday/time allowlist before any market-data fetch, LLM call, or notification.
 
-Actual push times, Monday through Friday in UTC+8:
+Actual run times, Monday through Friday in New York time:
 
-- 10:00
-- 21:30
-- 22:00
-- 22:30
-- 23:00
-- 00:00
+- 10:30
+- 11:30
+- 12:30
+- 13:30
+- 14:30
+- 15:30
+
+There is no 16:00 close or after-hours push.
 
 The manual service uses `railway.manual.toml`:
 
@@ -73,7 +75,7 @@ For OpenOX, use `LLM_CONFIG=openox`. `configs/llms/openox.yaml` persists the bas
 
 To add or remove monitored symbols, edit `WATCHLIST_CRYPTO_SYMBOLS` and `WATCHLIST_EQUITY_SYMBOLS` in Railway Variables and redeploy/restart the Cron service. No code push is needed.
 
-Feishu reports are sent as rich text (`msg_type=post`). Each run sends a summary message plus separate per-symbol messages instead of one oversized full report.
+Each qualified 1H/4H/DAY opportunity is sent as a Feishu execution card. If no new opportunity passes the structured contract, the run sends only one short summary. The same high-timeframe opportunity is not sent twice.
 
 Crypto reports try Binance USD-M first. If the Railway region receives Binance `HTTP 451`, the report automatically falls back to OKX public swap data, then Yahoo spot crypto data.
 
@@ -93,7 +95,7 @@ Without Postgres or a volume, the Feishu report still works, but historical indi
 2. In Settings, set **Railway Config File** to `/railway.toml`.
 3. Confirm the service settings show:
    - Start Command: `python -m app.main scheduled-report --hours 1 --send`
-   - Cron Schedule: `0,30 2,13,14,15,16 * * 0-5`
+   - Cron Schedule: `30 14-20 * * 1-5`
 4. Add the variables above in the service Variables tab.
 5. Deploy. Railway will create an instance only at a scheduled candidate time.
 

@@ -20,6 +20,9 @@ TOP_LEVEL_LABELS = (
     "机会等级",
     "交易机会",
     "机会类型",
+    "周期",
+    "执行方式",
+    "执行条件",
     "数据时间 / 数据源 / 数据质量",
     "当前状态",
     "策略结论",
@@ -55,13 +58,18 @@ class ProtocolReportSummary:
     level: str
     trade_opportunity: str
     opportunity_type: str
+    timeframe: str
     current_status: str
     current_instruction: str
     direction: str
+    execution_mode: str
+    execution_condition: str
     entry: str
     stop_loss: str
     targets: str
     rr: str
+    time_stop: str
+    position: str
     trigger: str
     invalidation: str
     long_alert: str
@@ -183,17 +191,41 @@ def build_protocol_card_payload(title: str, summary: ProtocolReportSummary, keyw
             }
         )
 
-    plan_fields = [("Entry", summary.entry), ("SL", summary.stop_loss), ("TP/RR", _join_compact([summary.targets, summary.rr], " / "))]
+    plan_fields = [
+        ("执行", _join_compact([summary.execution_mode, summary.execution_condition], " / ")),
+        ("Entry", summary.entry),
+        ("SL", summary.stop_loss),
+        ("TP/RR", _join_compact([summary.targets, summary.rr], " / ")),
+    ]
     watch_fields = [("触发", summary.trigger), ("失效", summary.invalidation)]
     fields = _card_fields(
         [
             ("当前指令", summary.current_instruction),
-            ("方向", summary.direction),
+            ("周期/方向", _join_compact([summary.timeframe, summary.direction], " / ")),
             *(_only_non_empty(plan_fields) if _should_show_trade_plan(summary) else _only_non_empty(watch_fields)),
         ]
     )
     if fields:
         elements.append({"tag": "div", "fields": fields})
+    if _should_show_trade_plan(summary) and (summary.time_stop or summary.position):
+        elements.append(
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": _trim_card_text(
+                        _join_compact(
+                            [
+                                f"**时间止损：**{summary.time_stop}" if summary.time_stop else "",
+                                f"**仓位：**{summary.position}" if summary.position else "",
+                            ],
+                            " | ",
+                        ),
+                        500,
+                    ),
+                },
+            }
+        )
 
     if summary.conclusion or summary.current_status:
         elements.append(
@@ -298,13 +330,25 @@ def _parse_three_part_protocol_summary(
         level=_brief_text(_extract_field(analysis_block, "机会等级") or _extract_field(body, "机会等级"), 40) or "UNKNOWN",
         trade_opportunity=_brief_text(_extract_field(analysis_block, "交易机会") or _extract_field(body, "交易机会"), 30) or "未知",
         opportunity_type=_brief_text(_extract_field(analysis_block, "机会类型"), 40) or "None",
+        timeframe=_brief_text(
+            _extract_field(execution_block, "周期") or _extract_field(analysis_block, "机会类型"),
+            20,
+        ),
         current_status=_brief_text(_extract_field(analysis_block, "策略结论"), 180),
         current_instruction=_brief_text(_extract_field(execution_block, "当前指令"), 160),
         direction=_brief_text(_extract_field(execution_block, "方向"), 80),
+        execution_mode=_brief_text(_extract_field(execution_block, "执行方式"), 40),
+        execution_condition=_brief_text(
+            _extract_field(execution_block, "执行条件")
+            or _extract_field(execution_block, "当前指令"),
+            180,
+        ),
         entry=_brief_text(_extract_field(execution_block, "Entry/触发"), 180),
         stop_loss=_brief_text(_extract_field(execution_block, "SL/失效"), 120),
         targets=_brief_text(_extract_field(execution_block, "TP/RR"), 160),
         rr="",
+        time_stop=_brief_text(_extract_field(execution_block, "时间止损"), 100),
+        position=_brief_text(_extract_field(execution_block, "仓位"), 80),
         trigger=_brief_text(_extract_field(execution_block, "Entry/触发"), 180),
         invalidation=_brief_text(_extract_field(execution_block, "SL/失效"), 160),
         long_alert="",
@@ -337,13 +381,18 @@ def _parse_legacy_protocol_summary(title: str, body: str) -> ProtocolReportSumma
         level=_brief_text(_first_line(_extract_top_block(body, "机会等级")), 40) or "UNKNOWN",
         trade_opportunity=_brief_text(_first_line(_extract_top_block(body, "交易机会")), 30) or "未知",
         opportunity_type=_brief_text(_first_line(_extract_top_block(body, "机会类型")), 40) or "None",
+        timeframe="",
         current_status=_brief_text(_extract_top_block(body, "当前状态"), 180),
         current_instruction=_brief_text(_extract_bullet_value(final_block, "当前指令"), 160),
         direction=_brief_text(_extract_bullet_value(micro_block, "方向") or _extract_bullet_value(macro_block, "方向"), 80),
+        execution_mode="",
+        execution_condition="",
         entry=_brief_text(_extract_bullet_value(micro_block, "Entry"), 180),
         stop_loss=_brief_text(_extract_bullet_value(micro_block, "SL"), 120),
         targets=_brief_text(_extract_bullet_value(micro_block, "TP1 / TP2 / TP3"), 160),
         rr=_brief_text(_extract_bullet_value(micro_block, "TP1 R/R"), 90),
+        time_stop="",
+        position="",
         trigger=_brief_text(
             _extract_bullet_value(micro_block, "触发条件") or _extract_bullet_value(macro_block, "观察/建仓条件"),
             180,
@@ -615,8 +664,7 @@ def _card_template(level: str, trade_opportunity: str) -> str:
 
 
 def _should_show_trade_plan(summary: ProtocolReportSummary) -> bool:
-    normalized = f"{summary.level} {summary.trade_opportunity}".upper()
-    return "TRADE" in normalized or "ARMED" in normalized or summary.trade_opportunity == "是"
+    return summary.level.strip().upper() == "TRADE" and summary.trade_opportunity.strip() == "是"
 
 
 def _only_non_empty(items: list[tuple[str, str]]) -> list[tuple[str, str]]:

@@ -7,6 +7,7 @@ from app.config.settings import Settings
 from app.review import llm_protocol_report
 from app.review.indicator_snapshot import (
     IndicatorSnapshotEvent,
+    _aggregate_equity_4h,
     _crypto_protocol_candidates,
     _displacement_pack,
     _equity_protocol_candidates,
@@ -107,8 +108,7 @@ def test_equity_protocol_candidates_are_evidence_not_final_judgment():
     pack = _indicator_pack(_candles(220), "1d", market="equity")
     candidates = _equity_protocol_candidates(
         120.0,
-        {"high": 121.0, "low": 118.0},
-        {"15m": pack, "60m": pack, "1d": pack, "1wk": pack},
+        {"1h": pack, "4h": pack, "1d": pack},
         {
             "primary_benchmark": "SOXX",
             "relative_factors": {"benchmarks": {"SOXX": {"relative_return_5_pct": 1.2, "relative_return_20_pct": 3.4}}},
@@ -116,31 +116,86 @@ def test_equity_protocol_candidates_are_evidence_not_final_judgment():
         },
     )
 
-    assert "LLM must decide" in candidates["contract"]
-    assert "M-E1_sector_rotation_trend" in candidates["micro"]
-    assert "W-E1_weekly_sector_trend" in candidates["macro"]
-    assert "final_direction" not in candidates
+    assert "High-timeframe evidence only" in candidates["contract"]
+    assert set(candidates["timeframes"]) == {"1H", "4H", "DAY"}
+    assert candidates["relative_context"]["primary_benchmark"] == "SOXX"
+    assert "15m" not in json.dumps(candidates).lower()
 
 
-def test_crypto_protocol_candidates_cover_micro_and_macro_patterns():
-    pack = _indicator_pack(_candles(220), "15m", market="crypto")
+def test_crypto_protocol_candidates_cover_only_high_timeframes():
+    pack = _indicator_pack(_candles(220), "1h", market="crypto")
     candidates = _crypto_protocol_candidates(
-        {"15m": pack, "4h": pack, "1d": pack},
+        {"1h": pack, "4h": pack, "1d": pack},
         {"funding_rate_pct": 0.01, "open_interest": 1000, "basis_pct": 0.02},
     )
 
-    assert set(candidates["micro"]) == {
-        "C-M1_lvn_expansion",
-        "C-M2_pullback_or_retest_failure",
-        "C-M3_liquidity_sweep",
-        "C-M4_funding_oi_squeeze",
-    }
-    assert set(candidates["macro"]) == {
-        "C-W1_btc_trend_follow",
-        "C-W2_alt_beta_rotation",
-        "C-W3_daily_absorption_reversal",
-        "C-W4_macro_range",
-    }
+    assert set(candidates["timeframes"]) == {"1H", "4H", "DAY"}
+    assert candidates["derivatives_context"]["funding_rate_pct"] == 0.01
+    assert "15m" not in json.dumps(candidates).lower()
+
+
+def test_equity_4h_aggregation_never_crosses_new_york_sessions():
+    candles = []
+    for day in (13, 14):
+        for hour in (13, 14, 15, 16):
+            candles.append(
+                {
+                    "time": datetime(2026, 7, day, hour, 30, tzinfo=timezone.utc).isoformat(),
+                    "open": 100 + day,
+                    "high": 102 + day,
+                    "low": 99 + day,
+                    "close": 101 + day,
+                    "volume": 10,
+                }
+            )
+    candles.append(
+        {
+            "time": datetime(2026, 7, 14, 17, 30, tzinfo=timezone.utc).isoformat(),
+            "open": 999,
+            "high": 999,
+            "low": 999,
+            "close": 999,
+            "volume": 1,
+        }
+    )
+
+    aggregated = _aggregate_equity_4h(candles)
+
+    assert len(aggregated) == 2
+    assert [bar["time"] for bar in aggregated] == [candles[0]["time"], candles[4]["time"]]
+    assert all(bar["volume"] == 40 for bar in aggregated)
+    assert all(bar["close"] != 999 for bar in aggregated)
+
+
+def test_equity_4h_aggregation_keeps_completed_session_tail_only():
+    candles = []
+    for day in (13, 14):
+        for index, hour in enumerate(range(13, 20)):
+            price = day * 10 + index
+            candles.append(
+                {
+                    "time": datetime(2026, 7, day, hour, 30, tzinfo=timezone.utc).isoformat(),
+                    "open": price,
+                    "high": price + 2,
+                    "low": price - 1,
+                    "close": price + 1,
+                    "volume": 10,
+                }
+            )
+
+    aggregated = _aggregate_equity_4h(
+        candles,
+        as_of=datetime(2026, 7, 14, 19, 30, tzinfo=timezone.utc),
+    )
+
+    assert [bar["time"] for bar in aggregated] == [
+        candles[0]["time"],
+        candles[4]["time"],
+        candles[7]["time"],
+    ]
+    assert [bar["volume"] for bar in aggregated] == [40, 30, 40]
+    assert aggregated[1]["close"] == candles[6]["close"]
+    assert all(bar["time"] != candles[11]["time"] for bar in aggregated)
 
 
 def test_delta_flow_prefers_taker_buy_volume_when_available():
@@ -323,7 +378,12 @@ async def test_missing_llm_config_still_archives_snapshot(tmp_path, monkeypatch)
         async def save_snapshot(self, payload):
             saved["payload"] = payload
 
-    monkeypatch.setattr(llm_protocol_report, "build_indicator_snapshot", lambda _system_config, _settings=None: dict(snapshot))
+    item = snapshot["symbols"]["crypto"][0]
+
+    def fake_events(_system_config, _settings):
+        yield IndicatorSnapshotEvent(snapshot, "crypto", "ETHUSDT", item)
+
+    monkeypatch.setattr(llm_protocol_report, "iter_indicator_snapshot_events", fake_events)
     settings = Settings(
         llm_config="",
         llm_api_key="",
@@ -341,7 +401,7 @@ async def test_missing_llm_config_still_archives_snapshot(tmp_path, monkeypatch)
     )
 
     assert title == "SPM 2H LLM 协议监控报告"
-    assert "LLM API 配置未完成" in body
+    assert "LLM 未配置，无法按协议完成判断" in body
     assert "LLM_CONFIG is required" in body
     assert saved["payload"]["run_id"] == "test-run"
     archived = json.loads(archive_path.read_text(encoding="utf-8").strip())
@@ -353,8 +413,27 @@ async def test_stream_llm_protocol_report_parts_calls_llm_per_symbol(tmp_path, m
     protocol_path = tmp_path / "protocol.md"
     protocol_path.write_text("protocol", encoding="utf-8")
     archive_path = tmp_path / "snapshots.jsonl"
-    eth = {"symbol": "ETHUSDT", "market": "crypto", "status": "ok", "price": 100.0, "timeframes": {}}
-    btc = {"symbol": "BTCUSDT", "market": "crypto", "status": "ok", "price": 200.0, "timeframes": {}}
+    timeframes = {
+        "1h": {"atr14": 2.0, "last_bar": {"time": "2026-01-01T01:00:00+00:00"}},
+        "4h": {"atr14": 2.0, "last_bar": {"time": "2026-01-01T00:00:00+00:00"}},
+        "1d": {"atr14": 5.0, "last_bar": {"time": "2026-01-01T00:00:00+00:00"}},
+    }
+    eth = {
+        "symbol": "ETHUSDT",
+        "market": "crypto",
+        "status": "ok",
+        "price": 100.0,
+        "source": "test",
+        "timeframes": timeframes,
+    }
+    btc = {
+        "symbol": "BTCUSDT",
+        "market": "crypto",
+        "status": "ok",
+        "price": 200.0,
+        "source": "test",
+        "timeframes": timeframes,
+    }
     first_snapshot = {
         "run_id": "stream-run",
         "generated_at": "2026-01-01T00:00:00+00:00",
@@ -380,8 +459,40 @@ async def test_stream_llm_protocol_report_parts_calls_llm_per_symbol(tmp_path, m
         async def chat(self, messages):
             calls.append(messages)
             if len(calls) == 1:
-                return "## 标的：ETHUSDT（Crypto）\n机会等级：TRADE\n交易机会：是"
-            return "## 标的：BTCUSDT（Crypto）\n机会等级：NONE\n交易机会：否"
+                return json.dumps(
+                    {
+                        "status": "TRADE",
+                        "timeframe": "4H",
+                        "direction": "LONG",
+                        "execution_mode": "NOW",
+                        "execution_condition": "当前价保持在99-101时执行",
+                        "entry": 100,
+                        "entry_zone_low": 99,
+                        "entry_zone_high": 101,
+                        "stop_loss": 96,
+                        "tp1": 108,
+                        "tp2": 112,
+                        "time_stop": "2根4H K线",
+                        "position_r": 0.25,
+                        "protocol_setup": "C-H1",
+                        "score": 82,
+                        "evidence": ["DAY EMA20为95", "4H突破位为99", "4H量比为1.6"],
+                        "invalidation": "4H收盘跌破96",
+                        "summary": "按4H趋势突破做多",
+                        "rejection_reasons": [],
+                        "risk_reward": None,
+                    },
+                    ensure_ascii=False,
+                )
+            return json.dumps(
+                {
+                    "status": "NO_TRADE",
+                    "timeframe": None,
+                    "summary": "本轮不做",
+                    "rejection_reasons": ["DAY与4H方向冲突，协议得分仅52"],
+                },
+                ensure_ascii=False,
+            )
 
     class DummyArchiveRepository:
         async def save_snapshot(self, payload):
@@ -415,7 +526,10 @@ async def test_stream_llm_protocol_report_parts_calls_llm_per_symbol(tmp_path, m
     assert len(calls) == 2
     assert [part.symbol for part in parts] == ["ETHUSDT", "BTCUSDT"]
     assert parts[0].has_trade_opportunity is True
+    assert parts[0].decision["risk_reward"] == 2.0
+    assert parts[0].opportunity_id
     assert "交易机会" in parts[0].title
     assert parts[1].has_trade_opportunity is False
+    assert "当前指令：不做" in parts[1].body
     assert saved["payload"]["run_id"] == "stream-run"
     assert json.loads(archive_path.read_text(encoding="utf-8").strip())["run_id"] == "stream-run"

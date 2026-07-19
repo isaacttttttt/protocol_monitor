@@ -3,5 +3,5 @@ builder = "DOCKERFILE"
 
 [deploy]
 startCommand = "python -m app.main scheduled-report --hours 1 --send"
-cronSchedule = "0,30 2,13,14,15,16 * * 0-5"
+cronSchedule = "30 14-20 * * 1-5"
 restartPolicyType = "NEVER"
